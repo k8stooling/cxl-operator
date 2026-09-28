@@ -1,44 +1,28 @@
 # CXL Operator for Kubernetes
 
-This is a Kubernetes Operator (built with the Ansible Operator SDK) that manages **secondary ENI attachments for EKS worker nodes** and **synchronizes external `EndpointSlices`** to enable cross-VPC routing without VPC peering.
+This is a Kubernetes Operator built with the Ansible Operator SDK. It manages a strict per-node egress path for proxy workloads: one secondary ENI, one node-local initialization Job, and one `CiliumEgressGatewayPolicy` per proxy node.
 
-The operator runs decoupled reconciliation loops around source-node provisioning and proxy exposure state:
+The operator currently exposes two steady-state reconciliation loops plus a cleanup finalizer:
 
-1. **`eni_provisioner`** — watches `CiliumNode` resources (`cilium.io/v2`). For every node labeled `cxl.io/vpc-type=proxy` it:
-   * extracts the EC2 instance ID from the node's `spec['instance-id']`,
-   * reads the nodepool-injected subnet selector labels `cxl.io/subnet-tag-key` + `cxl.io/subnet-key-value` or `cxl.io/subnet-iids`,
-   * resolves candidate remote subnets from those labels and picks the subnet matching the node's own subnet / availability zone,
-   * attaches a secondary ENI from that remote subnet (idempotent via tags),
-   * annotates the Kubernetes Node with `network.infrastructure.io/secondary-eni-ip: <eth1 private IP>`,
-   * creates a one-shot **Bottlerocket** node initializer Job on that node which waits for `eth1`, assigns its address via AWS IMDSv2, and applies policy-based routing:
-     ```bash
-     ip route add default via <ETH1_GW> dev eth1 table 100
-     ip rule add from <ETH1_IP> lookup 100
-     echo 1 > /proc/sys/net/ipv4/conf/eth1/arp_ignore
-     echo 2 > /proc/sys/net/ipv4/conf/eth1/arp_announce
-     ```
-2. **`service_sync`** — watches source `Service` objects labeled `cxl.io/service=proxy`. This is the source-of-truth reconciliation for naming and port intent: it derives the managed selectorless resource names as `<source-service>-cxl`, mirrors the watched Service port configuration, and ensures the managed selectorless EndpointSlice uses `kubernetes.io/service-name: <source-service>-cxl`.
+1. `node_egress_provisioner` watches `CiliumNode` resources labeled `cxl.io/vpc-type=proxy`. For each matching node it resolves the EC2 instance, chooses the secondary subnet from node labels, creates or reuses a secondary ENI, stores the ENI ID and IP on the Kubernetes Node, stamps a deterministic `cxl.io/egress-gw` hash label, runs the Bottlerocket-compatible initializer Job, waits for Job success, removes the readiness taint, marks the node `cxl.io/egress-ready=true`, and applies a node-local `CiliumEgressGatewayPolicy`.
+2. `pod_topology_labeler` watches proxy Pods labeled `cxl.io/vpc-type=proxy`. Once a Pod is scheduled, it reads the scheduled node's `cxl.io/egress-gw` hash and only patches the Pod when the node is also labeled `cxl.io/egress-ready=true`.
+3. `node_egress_cleanup` runs from the `cxl.io/eni-cleanup` finalizer on `CiliumNode` and tears down the ENI and matching egress policy when the node is being removed.
 
-3. **`endpoint_slice_sync`** — watches the original workload `EndpointSlice` objects behind the source Service so backend churn is reflected immediately. As HAProxy or other proxy pods come and go, this reconciliation resolves the owning source Service, keeps only ready backends, looks up the backing Nodes, reads their `network.infrastructure.io/secondary-eni-ip` annotation, and overwrites the managed selectorless EndpointSlice with those ENI IPs. When no pod is ready anymore the endpoints array is cleared so the AWS Load Balancer Controller drains traffic.
-
-The result: an NLB in front of a selectorless Service named `<source-service>-cxl` routes traffic through secondary ENIs into the remote VPC — no VPC peering required, and L7 (pod) readiness directly drives L4 target registration.
+The target model is a strict 1:1 mapping: one proxy node, one secondary ENI, one gateway hash, one egress policy. That avoids cross-node or cross-AZ hops.
 
 ### Architecture
 
-```
-EKS cluster                         Remote VPC
-┌──────────────────────────────┐    ┌───────────────────────────┐
-│ proxy pods (ready)           │    │  remote subnet            │
-│   on nodes with a secondary  │◄───│  (secondary ENI subnet)   │
-│   ENI (eth1)                 │    │  NLB target group (ip)    │
-└──────────────────────────────┘    └───────────────────────────┘
-        ▲                                    ▲
-  │ service_sync + endpoint_slice_sync │ TargetGroupBinding (ip mode)
-┌───────┴────────────────────────────────────┴────────────────┐
-│ cxl-operator  (watches proxy CiliumNodes + Services +       │
-│                 source EndpointSlices)                       │
-│  eni_provisioner: EC2 ENI attach + node initializer Job     │
-└─────────────────────────────────────────────────────────────┘
+```text
+proxy Pod --label--> cxl.io/egress-gw=<hash>
+  |
+  v
+CiliumEgressGatewayPolicy cxl-<hash>
+  |
+  v
+gateway Node label cxl.io/egress-gw=<hash>
+  |
+  v
+secondary ENI eth1 + node-local PBR
 ```
 
 ## Installation
@@ -57,14 +41,14 @@ helm upgrade --install cxl-operator oci://ghcr.io/k8stooling/charts/cxl-operator
   --set watchNamespace="haproxy-remote"
 ```
 
-Subnet selection is not a global operator setting in this version. The nodepool must inject one of these label forms onto the reconciled nodes:
+Subnet selection is not a single global operator setting in this version. The proxy nodepool must inject one of these label forms onto the reconciled nodes:
 
 | Labels | Meaning |
 |-------|---------|
 | `cxl.io/subnet-tag-key` + `cxl.io/subnet-key-value` | Select candidate secondary subnets by AWS tag. |
 | `cxl.io/subnet-iids` | Comma-separated list of candidate subnet IDs. |
 
-The operator uses those labels to discover candidate remote subnets and then picks the one matching the node's primary subnet / availability zone.
+The operator uses those labels to discover candidate secondary subnets and then picks the one matching the node's primary subnet or availability zone.
 
 ### Key values
 
@@ -75,16 +59,14 @@ The operator uses those labels to discover candidate remote subnets and then pic
 | `nodeInitializerImage` | Image for the node initializer Job (needs `iproute2` + `curl`). |
 | `nodeInitializerJobNamespace` | Namespace for the initializer Jobs. Defaults to the operator namespace. |
 | `kyvernoPolicyException.*` | Controls the Helm-managed Kyverno `PolicyException` allowing the initializer Jobs to bypass `psp-restricted` in policy `kyverno-policies-3.8.2`. |
-| `targetSliceNamespace` | Namespace of the selectorless slice. Defaults to the triggered slice's namespace. |
+| `egressPolicyExcludedCidrs` | CIDRs excluded from `0.0.0.0/0` in the generated `CiliumEgressGatewayPolicy`. Defaults to `10.96.0.0/12`; add the cluster VPC CIDR at deploy time. |
 | `watchNamespace` | Restrict the operator to one namespace. Empty = all. |
 
 ### Supporting manifests
 
-The code path is not HAProxy-specific. Any Service using this pattern can be the source Service as long as it is labeled `cxl.io/service=proxy`.
+The operator is not tied to one proxy implementation, but the watched Pods must carry `cxl.io/vpc-type=proxy` so the pod labeler can bind them to the correct node-local gateway policy.
 
-The example manifests keep HAProxy-flavored names because that is the primary demonstration use case. Treat them as templates: the selectorless Service and managed EndpointSlice should use the source Service name with a `-cxl` suffix, and the selectorless Service port should stay aligned with the watched source Service port or `nodePort`.
-
-Because backend churn happens on the original workload `EndpointSlice` objects rather than on the source Service itself, the full design uses both the `service_sync` role and the `endpoint_slice_sync` role against a shared reconciliation path.
+The examples in [examples](examples) show the new proxy workload and nodepool label contract rather than the removed selectorless Service pattern.
 
 ## Development
 

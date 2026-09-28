@@ -1,6 +1,6 @@
 apiVersion: v2
 name: cxl-operator
-description: A Helm chart to install the k8stooling CXL operator (secondary ENI provisioning and remote EndpointSlice sync for cross-VPC routing)
+description: A Helm chart to install the k8stooling CXL operator for per-node secondary ENI provisioning and Cilium egress gateway enforcement
 
 # A chart can be either an 'application' or a 'library' chart.
 #

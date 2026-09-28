@@ -143,9 +143,14 @@ kyvernoPolicyException:
     - psp-restricted
     - autogen-psp-restricted
 
-# Namespace of the target (selectorless) EndpointSlice.
-# Empty = the namespace of the triggered EndpointSlice.
-targetSliceNamespace: ""
+# Optional CIDR exclusions for the generated node-local egress policies.
+# Defaults include the standard Kubernetes Service ClusterIP range.
+# Systems-manage or another deploy path should append the cluster-specific
+# service CIDR and any VPC-local CIDRs discovered from inventory.
+egressPolicyDefaultExcludedCidrs:
+  - 10.96.0.0/12
+egressPolicyExcludedCidrs:
+  - 172.20.0.0/16
 
 # Namespaces the operator watches. Empty watches all namespaces.
 watchNamespace: ""

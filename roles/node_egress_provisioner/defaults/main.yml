@@ -1,0 +1,36 @@
+---
+nodepool_label_key: "cxl.io/vpc-type"
+nodepool_label_value: "proxy"
+zone_label_key: "topology.kubernetes.io/zone"
+
+secondary_eni_id_annotation: "network.infrastructure.io/secondary-eni-id"
+secondary_eni_annotation: "network.infrastructure.io/secondary-eni-ip"
+egress_gateway_label_key: "cxl.io/egress-gw"
+egress_gateway_ready_label_key: "cxl.io/egress-ready"
+egress_gateway_ready_taint_key: "cxl.io/egress-not-ready"
+egress_gateway_ready_taint_effect: "NoSchedule"
+
+aws_region: "{{ lookup('env', 'AWS_REGION') | default('us-east-1', true) }}"
+
+subnet_tag_key_label: "cxl.io/subnet-tag-key"
+subnet_tag_value_label: "cxl.io/subnet-key-value"
+subnet_ids_label: "cxl.io/subnet-iids"
+
+secondary_eni_device_index: "{{ lookup('env', 'SECONDARY_ENI_DEVICE_INDEX') | default('1', true) | int }}"
+secondary_eni_tag_key: "cxl-node"
+secondary_eni_name_prefix: "cxl-secondary-eni"
+
+egress_policy_api_version: "cilium.io/v2"
+egress_policy_kind: "CiliumEgressGatewayPolicy"
+egress_policy_name_prefix: "cxl"
+egress_policy_destinations:
+  - "0.0.0.0/0"
+egress_policy_default_excluded_cidrs_raw: "{{ lookup('env', 'EGRESS_POLICY_DEFAULT_EXCLUDED_CIDRS') | default('10.96.0.0/12', true) }}"
+egress_policy_excluded_cidrs_raw: "{{ lookup('env', 'EGRESS_POLICY_EXCLUDED_CIDRS') | default('', true) }}"
+
+node_initializer_image: "{{ lookup('env', 'NODE_INITIALIZER_IMAGE') | default('public.ecr.aws/amazonlinux/amazonlinux:2023', true) }}"
+node_initializer_job_namespace: "{{ lookup('env', 'NODE_INITIALIZER_JOB_NAMESPACE') | default('', true) }}"
+node_initializer_ttl_seconds: 3600
+node_initializer_eth1_wait_seconds: 300
+node_initializer_job_wait_retries: 40
+node_initializer_job_wait_delay: 15

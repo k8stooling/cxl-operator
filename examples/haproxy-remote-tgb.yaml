@@ -1,21 +1,20 @@
 ---
-# Binds the selectorless Service to an existing AWS Network Load Balancer
-# target group (targetType: ip). The AWS Load Balancer Controller watches
-# the managed '<source-service>-cxl' EndpointSlice (which the operator keeps in
-# sync with the secondary ENI IPs of ready proxy nodes) and registers / drains
-# the targets accordingly.
-#
-# Demonstration only: this keeps the HAProxy-flavored service name. Replace the
-# placeholder target group ARN with your NLB target group.
-apiVersion: elbv2.k8s.aws/v1beta1
-kind: TargetGroupBinding
+# Example NodePool labels and taint contract for nodes that should be managed
+# by the cxl-operator. The operator watches CiliumNode resources created from
+# these nodes and expects the subnet selector labels to be present.
+apiVersion: karpenter.sh/v1
+kind: NodePool
 metadata:
-  name: haproxy-remote-eni
-  labels:
-    app.kubernetes.io/name: haproxy-remote-eni
-    app.kubernetes.io/managed-by: cxl-operator
+  name: proxy-example
 spec:
-  serviceRef:
-    name: haproxy-remote-eni-svc-cxl
-    port: 32080
-  targetGroupARN: "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/haproxy-remote/tg-0123456789abcdef0"
+  template:
+    metadata:
+      labels:
+        cxl.io/vpc-type: proxy
+        cxl.io/subnet-tag-key: caas.io/nodepool
+        cxl.io/subnet-key-value: proxy-example
+    spec:
+      taints:
+        - key: cxl.io/egress-not-ready
+          value: "true"
+          effect: NoSchedule

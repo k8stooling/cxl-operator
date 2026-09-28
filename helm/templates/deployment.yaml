@@ -51,8 +51,6 @@ spec:
               value: {{ .Values.nodeInitializerImage | quote }}
             - name: NODE_INITIALIZER_JOB_NAMESPACE
               value: {{ .Values.nodeInitializerJobNamespace | default "" | quote }}
-            - name: TARGET_SLICE_NAMESPACE
-              value: {{ .Values.targetSliceNamespace | default "" | quote }}
             {{- if .Values.aws.secretName }}
             - name: AWS_ACCESS_KEY_ID
               valueFrom:
@@ -71,6 +69,10 @@ spec:
                   key: {{ .Values.aws.sessionTokenKey }}
                   optional: true
             {{- end }}
+            - name: EGRESS_POLICY_DEFAULT_EXCLUDED_CIDRS
+              value: {{ join "," .Values.egressPolicyDefaultExcludedCidrs | quote }}
+            - name: EGRESS_POLICY_EXCLUDED_CIDRS
+              value: {{ join "," .Values.egressPolicyExcludedCidrs | quote }}
             - name: WATCH_NAMESPACE
               value: {{ .Values.watchNamespace | default "" | quote }}
             - name: POD_NAME

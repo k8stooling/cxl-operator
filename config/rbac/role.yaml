@@ -41,25 +41,6 @@ rules:
   ## CXL operator rules
   ##
   - apiGroups:
-      - discovery.k8s.io
-    resources:
-      - endpointslices
-    verbs:
-      - create
-      - get
-      - list
-      - watch
-      - patch
-      - update
-  - apiGroups:
-      - ""
-    resources:
-      - services
-    verbs:
-      - get
-      - list
-      - watch
-  - apiGroups:
       - ""
     resources:
       - nodes
@@ -74,16 +55,22 @@ rules:
       - jobs
     verbs:
       - create
+      - get
       - list
-      - watch
       - delete
+      - patch
+      - update
+      - watch
   - apiGroups:
       - cilium.io
     resources:
       - ciliumnodes
       - ciliumnodes/status
       - ciliumnodes/finalizers
+      - ciliumegressgatewaypolicies
     verbs:
+      - create
+      - delete
       - get
       - list
       - watch

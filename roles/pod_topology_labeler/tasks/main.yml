@@ -1,0 +1,63 @@
+---
+- block:
+    - name: Fetch the Pod resource
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+      register: pod_res
+
+    - name: Set Pod fact
+      ansible.builtin.set_fact:
+        pod_resource: "{{ pod_res.resources[0] if pod_res.resources | length > 0 else {} }}"
+
+    - name: Skip missing Pods
+      ansible.builtin.meta: end_host
+      when: pod_resource.keys() | length == 0
+
+    - name: Skip Pods that are not proxy workloads
+      ansible.builtin.meta: end_host
+      when: (pod_resource.metadata.labels | default({}))[proxy_pod_label_key | default('')] != proxy_pod_label_value
+
+    - name: Skip unscheduled Pods
+      ansible.builtin.meta: end_host
+      when: (pod_resource.spec.nodeName | default('') | trim | length) == 0
+
+    - name: Fetch the scheduled Node
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+        name: "{{ pod_resource.spec.nodeName }}"
+      register: node_res
+
+    - name: Resolve the desired node-local egress hash
+      ansible.builtin.set_fact:
+        desired_egress_gateway_hash: >-
+          {{ ((node_res.resources[0].metadata.labels | default({}))[egress_gateway_label_key] | default('')) if node_res.resources | length > 0 else '' }}
+        desired_egress_gateway_ready: >-
+          {{ ((node_res.resources[0].metadata.labels | default({}))[egress_gateway_ready_label_key] | default('false')) if node_res.resources | length > 0 else 'false' }}
+        current_egress_gateway_hash: >-
+          {{ (pod_resource.metadata.labels | default({}))[egress_gateway_label_key] | default('') }}
+
+    - name: Skip Pods whose Node is not ready for gateway labeling yet
+      ansible.builtin.meta: end_host
+      when:
+        - desired_egress_gateway_hash | trim | length == 0
+          or desired_egress_gateway_ready != 'true'
+
+    - name: Patch the Pod with the node-local egress hash
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Pod
+        metadata:
+          name: "{{ pod_resource.metadata.name }}"
+          namespace: "{{ pod_resource.metadata.namespace }}"
+          labels:
+            "{{ egress_gateway_label_key }}": "{{ desired_egress_gateway_hash }}"
+      when: current_egress_gateway_hash != desired_egress_gateway_hash
+
+  rescue:
+    - name: Fail the pod topology labeling playbook
+      ansible.builtin.fail:
+        msg: "pod_topology_labeler playbook failed for Pod {{ ansible_operator_meta.namespace }}/{{ ansible_operator_meta.name }}. Check operator logs."

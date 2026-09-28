@@ -1,0 +1,9 @@
+---
+secondary_eni_id_annotation: "network.infrastructure.io/secondary-eni-id"
+egress_gateway_label_key: "cxl.io/egress-gw"
+egress_gateway_ready_label_key: "cxl.io/egress-ready"
+secondary_eni_tag_key: "cxl-node"
+aws_region: "{{ lookup('env', 'AWS_REGION') | default('us-east-1', true) }}"
+egress_policy_api_version: "cilium.io/v2"
+egress_policy_kind: "CiliumEgressGatewayPolicy"
+egress_policy_name_prefix: "cxl"

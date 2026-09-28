@@ -14,21 +14,15 @@ rules:
     resources: [deployments, daemonsets, replicasets, statefulsets]
     verbs: [create, delete, get, list, patch, update, watch]
   # CXL operator rules
-  - apiGroups: ["discovery.k8s.io"]
-    resources: [endpointslices]
-    verbs: [create, get, list, watch, patch, update]
-  - apiGroups: [""]
-    resources: [services]
-    verbs: [get, list, watch]
   - apiGroups: [""]
     resources: [nodes]
     verbs: [get, list, watch, patch]
   - apiGroups: ["batch"]
     resources: [jobs]
-    verbs: [create, list, watch, delete]
+    verbs: [create, delete, get, list, patch, update, watch]
   - apiGroups: ["cilium.io"]
-    resources: [ciliumnodes, ciliumnodes/status, ciliumnodes/finalizers]
-    verbs: [get, list, watch, patch, update]
+    resources: [ciliumnodes, ciliumnodes/status, ciliumnodes/finalizers, ciliumegressgatewaypolicies]
+    verbs: [create, delete, get, list, watch, patch, update]
   {{- with .Values.extraClusterRoleRules }}
   {{ toYaml . | indent 2 }}
   {{- end }}
