@@ -1,0 +1,26 @@
+---
+# Selectorless Service that fronts the secondary ENI IPs of the
+# proxy worker nodes. Endpoints are managed exclusively by the
+# cxl-operator (`service_sync` + `endpoint_slice_sync`) via the managed
+# '<source-service>-cxl' EndpointSlice. Do NOT add a spec.selector here.
+#
+# Demonstration only: this keeps the HAProxy-flavored name, but the general
+# pattern is to name the selectorless Service after the watched source Service
+# with a '-cxl' suffix and align the port or nodePort with that source Service.
+apiVersion: v1
+kind: Service
+metadata:
+  name: haproxy-remote-eni-svc-cxl
+  labels:
+    app.kubernetes.io/name: haproxy-remote-eni
+    app.kubernetes.io/managed-by: cxl-operator
+spec:
+  type: NodePort
+  # Intentionally selectorless - endpoints come from the operator-managed
+  # EndpointSlice labeled kubernetes.io/service-name=haproxy-remote-eni-svc-cxl.
+  ports:
+    - name: http
+      port: 32080
+      targetPort: 32080
+      protocol: TCP
+      nodePort: 32080

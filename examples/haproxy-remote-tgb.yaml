@@ -1,0 +1,21 @@
+---
+# Binds the selectorless Service to an existing AWS Network Load Balancer
+# target group (targetType: ip). The AWS Load Balancer Controller watches
+# the managed '<source-service>-cxl' EndpointSlice (which the operator keeps in
+# sync with the secondary ENI IPs of ready proxy nodes) and registers / drains
+# the targets accordingly.
+#
+# Demonstration only: this keeps the HAProxy-flavored service name. Replace the
+# placeholder target group ARN with your NLB target group.
+apiVersion: elbv2.k8s.aws/v1beta1
+kind: TargetGroupBinding
+metadata:
+  name: haproxy-remote-eni
+  labels:
+    app.kubernetes.io/name: haproxy-remote-eni
+    app.kubernetes.io/managed-by: cxl-operator
+spec:
+  serviceRef:
+    name: haproxy-remote-eni-svc-cxl
+    port: 32080
+  targetGroupARN: "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/haproxy-remote/tg-0123456789abcdef0"

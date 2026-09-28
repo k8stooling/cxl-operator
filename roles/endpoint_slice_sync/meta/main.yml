@@ -1,0 +1,18 @@
+---
+galaxy_info:
+  role_name: endpoint_slice_sync
+  author: k8stooling
+  description: >-
+    Reconciles backend churn from source workload EndpointSlices into the
+    managed selectorless CXL EndpointSlice.
+  license: MIT
+  min_ansible_version: "2.11"
+  platforms:
+    - name: EL
+      versions:
+        - "8"
+        - "9"
+  galaxy_tags:
+    - kubernetes
+    - networking
+dependencies: []

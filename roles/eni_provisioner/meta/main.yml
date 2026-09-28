@@ -1,0 +1,19 @@
+---
+galaxy_info:
+  role_name: eni_provisioner
+  author: k8stooling
+  description: >-
+    Attaches a secondary EC2 ENI to proxy worker nodes and runs a
+    privileged node initializer Job that configures policy-based routing on it.
+  license: MIT
+  min_ansible_version: "2.11"
+  platforms:
+    - name: EL
+      versions:
+        - "8"
+        - "9"
+  galaxy_tags:
+    - kubernetes
+    - aws
+    - networking
+dependencies: []

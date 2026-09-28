@@ -1,0 +1,12 @@
+---
+# roles/endpoint_slice_sync/tasks/main.yml
+#
+# Trigger: EndpointSlice (discovery.k8s.io/v1).
+# 1. Skip operator-managed or unrelated EndpointSlices.
+# 2. Resolve the owning source Service.
+# 3. Reuse the same reconciliation path as service_sync so backend churn is
+#    reflected immediately in the managed CXL EndpointSlice.
+- name: Reconcile the managed CXL EndpointSlice from an EndpointSlice trigger
+  ansible.builtin.include_tasks: "{{ role_path | dirname }}/service_sync/tasks/reconcile.yml"
+  vars:
+    sync_trigger_kind: "endpointslice"

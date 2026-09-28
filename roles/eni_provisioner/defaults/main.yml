@@ -1,0 +1,40 @@
+---
+# Only CiliumNodes carrying this label are reconciled by this role.
+nodepool_label_key: "cxl.io/vpc-type"
+nodepool_label_value: "proxy"
+
+# Label holding the node's availability zone.
+zone_label_key: "topology.kubernetes.io/zone"
+
+# Annotation written onto the Kubernetes Node once the secondary ENI is attached.
+secondary_eni_annotation: "network.infrastructure.io/secondary-eni-ip"
+
+# ---- AWS / secondary ENI configuration -------------------------------------
+aws_region: "us-east-1"
+
+# Labels injected onto the node/nodepool that define which secondary subnet
+# candidates may be used for the node being reconciled.
+subnet_tag_key_label: "cxl.io/subnet-tag-key"
+subnet_tag_value_label: "cxl.io/subnet-key-value"
+subnet_ids_label: "cxl.io/subnet-iids"
+
+# Device index the secondary ENI is attached at (0 is the primary ENI).
+secondary_eni_device_index: 1
+
+# Tag used to find an already-attached secondary ENI for idempotency.
+secondary_eni_tag_key: "kubernetes.io/cxl-secondary-eni"
+
+# ---- Node Initializer Job configuration ------------------------------------
+# Container image for the Bottlerocket node initializer Job. Must include
+# iproute2 and curl; interface configuration is done via IMDSv2.
+node_initializer_image: "public.ecr.aws/amazonlinux/amazonlinux:2023"
+
+# Namespace in which the initializer Jobs are created. Defaults to the
+# namespace where the operator is deployed (POD_NAMESPACE env var).
+node_initializer_job_namespace: ""
+
+# Grace period before the finished initializer Job is garbage collected.
+node_initializer_ttl_seconds: 3600
+
+# How long (seconds) the initializer script waits for eth1 to appear.
+node_initializer_eth1_wait_seconds: 300

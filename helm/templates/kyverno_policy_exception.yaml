@@ -1,0 +1,24 @@
+{{- if .Values.kyvernoPolicyException.enabled }}
+apiVersion: kyverno.io/v2
+kind: PolicyException
+metadata:
+  name: {{ include "cxl-operator.fullname" . }}-eni-init
+  namespace: {{ include "cxl-operator.nodeInitializerNamespace" . }}
+  labels:
+    {{- include "cxl-operator.labels" . | nindent 4 }}
+spec:
+  exceptions:
+    - policyName: {{ .Values.kyvernoPolicyException.policyName | quote }}
+      ruleNames:
+        {{- range .Values.kyvernoPolicyException.ruleNames }}
+        - {{ . | quote }}
+        {{- end }}
+  match:
+    any:
+      - resources:
+          kinds:
+            - Job
+            - Pod
+          names:
+            - cxl-eni-init-*
+{{- end }}

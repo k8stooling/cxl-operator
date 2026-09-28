@@ -1,0 +1,30 @@
+---
+# Three decoupled reconciliation loops for the CXL operator.
+#
+# 1. eni_provisioner: triggered by CiliumNode objects (cilium.io/v2).
+#    Only CiliumNodes carrying the label cxl.io/vpc-type=proxy are
+#    reconciled; the role itself skips everything else.
+- version: v2
+  group: cilium.io
+  kind: CiliumNode
+  role: eni_provisioner
+  reconcilePeriod: 30s
+
+# 2. service_sync: triggered by Service objects (v1). Only source Services
+#    labeled cxl.io/service=proxy are reconciled; this handles naming and
+#    port intent for the managed CXL resources.
+- version: v1
+  group: ""
+  kind: Service
+  role: service_sync
+  reconcilePeriod: 15s
+
+# 3. endpoint_slice_sync: triggered by EndpointSlice objects
+#    (discovery.k8s.io/v1). This handles backend churn for the source
+#    Services; the role resolves the owning Service and skips unrelated or
+#    operator-managed EndpointSlices.
+- version: v1
+  group: discovery.k8s.io
+  kind: EndpointSlice
+  role: endpoint_slice_sync
+  reconcilePeriod: 15s

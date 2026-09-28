@@ -1,0 +1,11 @@
+---
+# roles/service_sync/tasks/main.yml
+#
+# Trigger: Service (v1).
+# 1. Only reconcile source Services labeled cxl.io/service=proxy.
+# 2. Mirror source Service naming and port intent into the managed CXL
+#    selectorless EndpointSlice.
+- name: Reconcile the managed CXL EndpointSlice from a Service trigger
+  ansible.builtin.include_tasks: reconcile.yml
+  vars:
+    sync_trigger_kind: "service"

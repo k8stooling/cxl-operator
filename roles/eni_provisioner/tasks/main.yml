@@ -1,0 +1,305 @@
+---
+# roles/eni_provisioner/tasks/main.yml
+#
+# Trigger: CiliumNode (cilium.io/v2).
+# 1. Only reconcile nodes labeled cxl.io/vpc-type=proxy.
+# 2. Extract the EC2 instance ID from spec['instance-id'].
+# 3. Skip when the Node already carries the secondary-eni-ip annotation.
+# 4. Attach (create if needed) a secondary ENI from the node-selected remote subnet.
+# 5. Annotate the Node with the eth1 private IP.
+# 6. Create a privileged, host-networked initializer Job on that node that
+#    configures policy-based routing for the secondary ENI.
+- block:
+    # 1. Fetch the CiliumNode and filter by nodepool label
+    - name: Fetch the CiliumNode resource
+      kubernetes.core.k8s_info:
+        api_version: cilium.io/v2
+        kind: CiliumNode
+        name: "{{ ansible_operator_meta.name }}"
+      register: cilium_node_res
+
+    - name: Set CiliumNode fact
+      ansible.builtin.set_fact:
+        cilium_node: "{{ cilium_node_res.resources[0] if cilium_node_res.resources | length > 0 else {} }}"
+
+    - name: Extract the Kubernetes node name
+      ansible.builtin.set_fact:
+        cilium_node_name: "{{ cilium_node.spec.nodeName | default(ansible_operator_meta.name) }}"
+
+    - name: Skip nodes that are not in the proxy nodepool
+      ansible.builtin.meta: end_host
+      when: (cilium_node.metadata.labels | default({}))[nodepool_label_key | default('')] != nodepool_label_value
+
+    # 2. Extract the EC2 instance ID and node network placement from the CiliumNode
+    - name: Validate CiliumNode instance ID
+      ansible.builtin.fail:
+        msg: "CiliumNode {{ cilium_node_name }} has no spec['instance-id'] set"
+      when: (cilium_node.spec['instance-id'] | default('') | trim | length) == 0
+
+    - name: Set the EC2 instance ID from CiliumNode
+      ansible.builtin.set_fact:
+        ec2_instance_id: "{{ (cilium_node.spec['instance-id'] | default('')) | trim }}"
+
+    - name: Validate parsed EC2 instance ID
+      ansible.builtin.fail:
+        msg: "Could not parse EC2 instance ID from spec['instance-id'] '{{ cilium_node.spec['instance-id'] | default('') }}'"
+      when: not ec2_instance_id is match('^i-0[0-9a-f]{8,17}$')
+
+    # 3. Skip when the Node is already annotated
+    - name: Fetch the Kubernetes Node
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+        name: "{{ cilium_node_name }}"
+      register: k8s_node_res
+
+    - name: Set Node fact
+      ansible.builtin.set_fact:
+        k8s_node: "{{ k8s_node_res.resources[0] if k8s_node_res.resources | length > 0 else {} }}"
+
+    - name: Resolve the node-provided secondary subnet selector labels
+      ansible.builtin.set_fact:
+        node_subnet_tag_key: >-
+          {{
+            ((cilium_node.metadata.labels | default({}))[subnet_tag_key_label | default('')] | default(''))
+            | default((cilium_node.spec.labels | default({}))[subnet_tag_key_label | default('')] | default(''), true)
+          }}
+        node_subnet_tag_value: >-
+          {{
+            ((cilium_node.metadata.labels | default({}))[subnet_tag_value_label | default('')] | default(''))
+            | default((cilium_node.spec.labels | default({}))[subnet_tag_value_label | default('')] | default(''), true)
+          }}
+        node_subnet_ids_raw: >-
+          {{
+            ((cilium_node.metadata.labels | default({}))[subnet_ids_label | default('')] | default(''))
+            | default((cilium_node.spec.labels | default({}))[subnet_ids_label | default('')] | default(''), true)
+          }}
+
+    - name: Normalize the node-provided subnet ID list
+      ansible.builtin.set_fact:
+        node_secondary_subnet_id_list: >-
+          {{ (node_subnet_ids_raw | default('')) | string | split(',') | map('trim') | select | list }}
+
+    - name: Ensure exactly one node subnet selector source is configured
+      ansible.builtin.fail:
+        msg: >-
+          Node {{ cilium_node_name }} must provide either both labels
+          {{ subnet_tag_key_label }} and {{ subnet_tag_value_label }}, or the
+          {{ subnet_ids_label }} label, but not both.
+      when: >-
+        (
+          (node_subnet_tag_key | default('') | trim | length > 0)
+          !=
+          (node_subnet_tag_value | default('') | trim | length > 0)
+        )
+        or
+        (
+          (node_secondary_subnet_id_list | length > 0)
+          and
+          (node_subnet_tag_key | default('') | trim | length > 0)
+        )
+        or
+        (
+          (node_secondary_subnet_id_list | length == 0)
+          and
+          (node_subnet_tag_key | default('') | trim | length == 0)
+        )
+
+    - name: Check for an existing secondary ENI annotation
+      ansible.builtin.set_fact:
+        existing_secondary_eni_ip: >-
+          {{ (k8s_node.metadata.annotations | default({}))[secondary_eni_annotation | default('')] | default('') }}
+
+    - name: Skip provisioning - Node already has a secondary ENI
+      ansible.builtin.debug:
+        msg: "Node {{ cilium_node_name }} already has secondary ENI IP {{ existing_secondary_eni_ip }}, skipping"
+      when: existing_secondary_eni_ip | trim | length > 0
+
+    - name: End reconciliation for already-provisioned nodes
+      ansible.builtin.meta: end_host
+      when: existing_secondary_eni_ip | trim | length > 0
+
+    # 4a. Determine the node's primary subnet and select the matching
+    #     secondary subnet (exact subnet ID when configured, otherwise same AZ)
+    - name: Determine the node subnet and availability zone
+      ansible.builtin.set_fact:
+        node_subnet_id: "{{ (cilium_node.spec.eni['node-subnet-id'] | default('')) | trim }}"
+        node_az: >-
+          {{
+            (cilium_node.spec.eni['availability-zone'] | default(''))
+            | default((cilium_node.metadata.labels | default({}))[zone_label_key | default('')] | default(''), true)
+            | default((cilium_node.spec.labels | default({}))[zone_label_key | default('')] | default(''), true)
+          }}
+
+    - name: Fail when the node subnet or availability zone could not be determined
+      ansible.builtin.fail:
+        msg: >-
+          Could not determine the primary subnet or availability zone from
+          CiliumNode {{ cilium_node_name }} / instance {{ ec2_instance_id }}.
+      when: node_subnet_id | length == 0 or node_az | trim | length == 0
+
+    - name: Look up the candidate secondary subnets
+      amazon.aws.ec2_vpc_net_info:
+        region: "{{ aws_region }}"
+        filters: "{{ subnet_query_filters }}"
+      register: candidate_subnets_res
+      vars:
+        subnet_query_filters: >-
+          {{
+            {'subnet-id': node_secondary_subnet_id_list}
+            if node_secondary_subnet_id_list | length > 0
+            else {('tag:' + node_subnet_tag_key): node_subnet_tag_value}
+          }}
+
+    - name: Select the candidate subnet matching the node subnet
+      ansible.builtin.set_fact:
+        selected_subnet: >-
+          {{
+            (
+              candidate_subnets_res.subnets | default([])
+              | selectattr('subnet_id', 'equalto', node_subnet_id)
+              | list
+              | sort(attribute='subnet_id')
+              | first
+            )
+            | default(
+                (
+                  candidate_subnets_res.subnets | default([])
+                  | selectattr('availability_zone', 'equalto', node_az)
+                  | list
+                  | sort(attribute='subnet_id')
+                  | first
+                ),
+                true
+              )
+            | default({}, true)
+          }}
+
+    - name: Fail when no secondary subnet matches the node subnet selection
+      ansible.builtin.fail:
+        msg: >-
+          No secondary subnet found for node {{ cilium_node_name }} in subnet
+          {{ node_subnet_id }} (AZ {{ node_az }}) using {{ subnet_ids_label }}={{ node_secondary_subnet_id_list | join(', ') }}
+          or {{ subnet_tag_key_label }}={{ node_subnet_tag_key }}, {{ subnet_tag_value_label }}={{ node_subnet_tag_value }}.
+      when: selected_subnet.keys() | length == 0
+
+    # 4. Attach a secondary ENI from the selected subnet
+    - name: Look up an already-attached secondary ENI by tag
+      amazon.aws.ec2_eni_info:
+        region: "{{ aws_region }}"
+        filters:
+          tag: "{{ secondary_eni_tag_key }}={{ ec2_instance_id }}"
+          attachment.instance-id: "{{ ec2_instance_id }}"
+          status: in-use
+      register: eni_lookup
+
+    - name: Set existing ENI fact
+      ansible.builtin.set_fact:
+        existing_eni: "{{ eni_lookup.enis[0] if eni_lookup.enis | length > 0 else {} }}"
+
+    - name: Create and attach a new secondary ENI
+      amazon.aws.ec2_eni:
+        region: "{{ aws_region }}"
+        subnet_id: "{{ selected_subnet.subnet_id }}"
+        in_subnet: true
+        instance: "{{ ec2_instance_id }}"
+        device_index: "{{ secondary_eni_device_index | int }}"
+        x_public_ip: false
+        name: "cxl-secondary-eni-{{ ec2_instance_id }}"
+        tags:
+          "{{ secondary_eni_tag_key }}": "{{ ec2_instance_id }}"
+          kubernetes.io/created-by: cxl-operator
+      register: eni_result
+      when: existing_eni.keys() | length == 0
+
+    - name: Resolve the secondary ENI private IP
+      ansible.builtin.set_fact:
+        secondary_eni_ip: >-
+          {{
+            existing_eni.private_ip_address
+            if existing_eni.keys() | length > 0
+            else eni_result.private_ip_address
+          }}
+
+    # 5. Annotate the Node with the eth1 private IP
+    - name: Annotate the Node with the secondary ENI IP
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Node
+        metadata:
+          name: "{{ cilium_node_name }}"
+          annotations:
+            "{{ secondary_eni_annotation }}": "{{ secondary_eni_ip }}"
+    # Resolve the subnet gateway for the initializer Job (the selected
+    # subnet object already carries its route tables)
+    - name: Extract the default-route gateway of the selected subnet
+      ansible.builtin.set_fact:
+        subnet_gateway_id: >-
+          {{
+            (selected_subnet.route_tables | default([])
+             | map(attribute='routes')
+             | flatten
+             | selectattr('destination_ip_range', 'defined')
+             | selectattr('destination_ip_range', 'equalto', '0.0.0.0/0')
+             | map(attribute='gateway_id')
+             | first)
+            | default('')
+          }}
+
+    - name: Look up the gateway IP address
+      amazon.aws.ec2_vpc_net_info:
+        region: "{{ aws_region }}"
+        filters:
+          gateway-id: "{{ subnet_gateway_id }}"
+      register: gateway_info
+      when: subnet_gateway_id | default('') | trim | length > 0
+
+    - name: Resolve the gateway IP
+      ansible.builtin.set_fact:
+        secondary_eni_gateway: >-
+          {{
+            (gateway_info.internet_gateways | default([]))[0].ip
+            if (gateway_info.internet_gateways | default([])) | length > 0
+            else ''
+          }}
+
+    - name: Fail when no default gateway could be resolved for the subnet
+      ansible.builtin.fail:
+        msg: >-
+          Could not resolve the default gateway of subnet
+          {{ selected_subnet.subnet_id }} (AZ {{ node_az }}); the initializer
+          Job requires it for policy-based routing.
+      when: secondary_eni_gateway | default('') | trim | length == 0
+
+    # 6. Create the Node Initializer Job (hostNetwork + CAP_NET_ADMIN)
+    - name: Set the initializer Job name and namespace
+      ansible.builtin.set_fact:
+        node_initializer_job_name: >-
+          {{ ('cxl-eni-init-' + cilium_node_name | regex_replace('[^a-z0-9-]', '-'))
+             | truncate(63, True, '') | trim('-') }}
+        node_initializer_job_namespace: >-
+          {{
+            node_initializer_job_namespace
+            if (node_initializer_job_namespace | default('') | trim) != ''
+            else (lookup('env', 'POD_NAMESPACE') | default('', true))
+          }}
+
+    - name: Create the Node Initializer Job
+      kubernetes.core.k8s:
+        src: "templates/node_initializer_job.yaml"
+        namespace: "{{ node_initializer_job_namespace }}"
+
+  rescue:
+    - name: Update CiliumNode status (Failed)
+      operator_sdk.util.k8s_status:
+        api_version: cilium.io/v2
+        kind: CiliumNode
+        name: "{{ ansible_operator_meta.name }}"
+        status:
+          reconciliationState: "Failed"
+          errorMessage: "The Ansible playbook encountered an error. Check operator logs."
+          lastSynced: "{{ lookup('pipe', 'date -u +\"%Y-%m-%dT%H:%M:%SZ\"') }}"
+
+    - name: Fail the playbook so Kubernetes knows it failed
+      ansible.builtin.fail:
+        msg: "eni_provisioner playbook failed for CiliumNode {{ ansible_operator_meta.name }}. Status updated."

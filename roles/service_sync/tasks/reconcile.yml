@@ -1,0 +1,194 @@
+---
+- block:
+    - name: Fetch the Service that triggered reconciliation
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Service
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+      register: service_res
+      when: sync_trigger_kind == 'service'
+
+    - name: Set the triggered Service fact from a Service trigger
+      ansible.builtin.set_fact:
+        triggered_service: "{{ service_res.resources[0] if service_res.resources | length > 0 else {} }}"
+      when: sync_trigger_kind == 'service'
+
+    - name: Fetch the EndpointSlice that triggered reconciliation
+      kubernetes.core.k8s_info:
+        api_version: discovery.k8s.io/v1
+        kind: EndpointSlice
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+      register: triggered_slice_res
+      when: sync_trigger_kind == 'endpointslice'
+
+    - name: Set the triggered EndpointSlice fact
+      ansible.builtin.set_fact:
+        triggered_slice: "{{ triggered_slice_res.resources[0] if triggered_slice_res.resources | length > 0 else {} }}"
+      when: sync_trigger_kind == 'endpointslice'
+
+    - name: Skip operator-managed EndpointSlices
+      ansible.builtin.meta: end_host
+      when:
+        - sync_trigger_kind == 'endpointslice'
+        - (triggered_slice.metadata.labels | default({}))[managed_slice_label_key | default('')] == managed_slice_label_value
+
+    - name: Resolve the source Service name from the EndpointSlice trigger
+      ansible.builtin.set_fact:
+        source_service_name: >-
+          {{ ((triggered_slice.metadata.labels | default({}))[source_service_label_key | default('')] | default('')) | trim }}
+      when: sync_trigger_kind == 'endpointslice'
+
+    - name: Skip EndpointSlices that do not belong to a Service
+      ansible.builtin.meta: end_host
+      when:
+        - sync_trigger_kind == 'endpointslice'
+        - source_service_name | default('') | length == 0
+
+    - name: Fetch the source Service from the EndpointSlice trigger
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Service
+        name: "{{ source_service_name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+      register: source_service_res
+      when: sync_trigger_kind == 'endpointslice'
+
+    - name: Set the triggered Service fact from the EndpointSlice trigger
+      ansible.builtin.set_fact:
+        triggered_service: "{{ source_service_res.resources[0] if source_service_res.resources | length > 0 else {} }}"
+      when: sync_trigger_kind == 'endpointslice'
+
+    - name: Skip EndpointSlices whose source Service no longer exists
+      ansible.builtin.meta: end_host
+      when:
+        - sync_trigger_kind == 'endpointslice'
+        - triggered_service.keys() | length == 0
+
+    - name: Skip Services that are not proxy Services
+      ansible.builtin.meta: end_host
+      when: (triggered_service.metadata.labels | default({}))[trigger_label_key | default('')] != trigger_label_value
+
+    - name: Fail when the source Service exposes no ports
+      ansible.builtin.fail:
+        msg: "Service {{ ansible_operator_meta.namespace }}/{{ triggered_service.metadata.name }} has no ports to mirror"
+      when: (triggered_service.spec.ports | default([]) | length) == 0
+
+    - name: Derive managed selectorless resource names and mirrored port
+      ansible.builtin.set_fact:
+        source_service_name: "{{ triggered_service.metadata.name }}"
+        managed_service_name: >-
+          {{
+            target_slice_service_name
+            if (target_slice_service_name | default('') | trim) != ''
+            else triggered_service.metadata.name + (target_name_suffix | default('-cxl'))
+          }}
+        managed_slice_name: >-
+          {{
+            target_slice_name
+            if (target_slice_name | default('') | trim) != ''
+            else triggered_service.metadata.name + (target_name_suffix | default('-cxl'))
+          }}
+        source_service_port: "{{ (triggered_service.spec.ports | first) | default({}) }}"
+        mirrored_service_port: >-
+          {{
+            (source_service_port.nodePort | default(0) | int)
+            if (source_service_port.nodePort | default(0) | int) > 0
+            else (source_service_port.port | default(0) | int)
+          }}
+
+    - name: Fetch the source Service EndpointSlices
+      kubernetes.core.k8s_info:
+        api_version: discovery.k8s.io/v1
+        kind: EndpointSlice
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        label_selectors:
+          - "{{ source_service_label_key }}={{ source_service_name }}"
+      register: source_slice_res
+
+    - name: Collect endpoints from the source Service EndpointSlices
+      ansible.builtin.set_fact:
+        source_service_endpoints: >-
+          {{
+            source_slice_res.resources | default([])
+            | map(attribute='endpoints')
+            | select('defined')
+            | list
+            | flatten
+          }}
+
+    - name: Extract the ready endpoints
+      ansible.builtin.set_fact:
+        ready_endpoints: >-
+          {{
+            source_service_endpoints | default([])
+            | selectattr('conditions', 'defined')
+            | selectattr('conditions.ready', 'defined')
+            | selectattr('conditions.ready', 'equalto', true)
+            | list
+          }}
+
+    - name: Collect the unique node names of the ready endpoints
+      ansible.builtin.set_fact:
+        ready_node_names: "{{ ready_endpoints | map(attribute='nodeName') | select | unique | list }}"
+
+    - name: Fetch the Nodes backing the ready endpoints
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+        name: "{{ item }}"
+      loop: "{{ ready_node_names }}"
+      register: node_res
+      ignore_errors: true
+
+    - name: Collect the secondary ENI IPs from the Node annotations
+      ansible.builtin.set_fact:
+        remote_eni_ips: >-
+          {{ remote_eni_ips | default([]) + ([node_ip] if node_ip | trim | length > 0 else []) }}
+      vars:
+        node_ip: "{{ ((item.resources | default([]) | first | default({})).metadata.annotations | default({}))[secondary_eni_annotation | default('')] | default('') }}"
+      loop: "{{ node_res.results | default([]) }}"
+
+    - name: Deduplicate and normalize the IP list
+      ansible.builtin.set_fact:
+        remote_eni_ips: "{{ remote_eni_ips | default([]) | map('trim') | unique | list }}"
+
+    - name: Set the target slice namespace
+      ansible.builtin.set_fact:
+        target_slice_ns: >-
+          {{
+            target_slice_namespace
+            if (target_slice_namespace | default('') | trim) != ''
+            else ansible_operator_meta.namespace
+          }}
+
+    - name: Build the desired endpoints array (empty drains the load balancer)
+      ansible.builtin.set_fact:
+        desired_remote_endpoints: >-
+          {{ desired_remote_endpoints | default([]) + [{'addresses': [item], 'conditions': {'ready': true}}] }}
+      loop: "{{ remote_eni_ips }}"
+
+    - name: Apply the selectorless target EndpointSlice
+      kubernetes.core.k8s:
+        api_version: discovery.k8s.io/v1
+        kind: EndpointSlice
+        metadata:
+          name: "{{ managed_slice_name }}"
+          namespace: "{{ target_slice_ns }}"
+          labels:
+            kubernetes.io/service-name: "{{ managed_service_name }}"
+            endpointslice.kubernetes.io/managed-by: "{{ managed_slice_label_value }}"
+        addressType: IPv4
+        endpoints: "{{ desired_remote_endpoints }}"
+        ports:
+          - name: "{{ source_service_port.name | default('tcp-' + (source_service_port.port | string)) }}"
+            port: "{{ mirrored_service_port | int }}"
+            protocol: "{{ source_service_port.protocol | default('TCP') }}"
+
+  rescue:
+    - name: Fail the shared proxy sync reconciliation
+      ansible.builtin.fail:
+        msg: >-
+          {{ sync_trigger_kind }} sync playbook failed for {{ ansible_operator_meta.kind }}
+          {{ ansible_operator_meta.name }}. Check operator logs.

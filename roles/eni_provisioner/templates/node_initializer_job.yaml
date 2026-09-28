@@ -1,0 +1,114 @@
+---
+# Node Initializer Job - configures the secondary ENI (eth1) on the target
+# Bottlerocket node: waits for the interface, assigns its IP via IMDSv2, and
+# applies policy-based routing so traffic sourced from the ENI IP uses it.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: "{{ node_initializer_job_name }}"
+  namespace: "{{ node_initializer_job_namespace }}"
+  labels:
+    app.kubernetes.io/name: cxl-eni-init
+    app.kubernetes.io/managed-by: cxl-operator
+  annotations:
+    cxl.k8stooling.io/node: "{{ cilium_node_name }}"
+    cxl.k8stooling.io/secondary-eni-ip: "{{ secondary_eni_ip }}"
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: {{ node_initializer_ttl_seconds }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cxl-eni-init
+        app.kubernetes.io/managed-by: cxl-operator
+    spec:
+      hostNetwork: true
+      hostPID: true
+      restartPolicy: Never
+      nodeName: "{{ cilium_node_name }}"
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: eni-init
+          image: "{{ node_initializer_image }}"
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: false
+            allowPrivilegeEscalation: true
+            capabilities:
+              add:
+                - NET_ADMIN
+          env:
+            - name: ETH1_IP
+              value: "{{ secondary_eni_ip }}"
+            - name: ETH1_GW
+              value: "{{ secondary_eni_gateway }}"
+            - name: ETH1_WAIT_SECONDS
+              value: "{{ node_initializer_eth1_wait_seconds }}"
+          command:
+            - /bin/sh
+            - -eu
+            - -c
+          args:
+            - |
+              set -eu
+
+              ETH1_IP="${ETH1_IP:?ETH1_IP must be set}"
+              ETH1_GW="${ETH1_GW:?ETH1_GW must be set}"
+              WAIT="${ETH1_WAIT_SECONDS:-300}"
+
+              # 1. Wait for eth1 to appear
+              i=0
+              while [ ! -e /sys/class/net/eth1 ]; do
+                i=$((i + 1))
+                if [ "${i}" -ge "${WAIT}" ]; then
+                  echo "ERROR: eth1 did not appear within ${WAIT}s" >&2
+                  exit 1
+                fi
+                sleep 1
+              done
+              echo "eth1 is present"
+
+              # 2. Bottlerocket path: configure eth1 directly from IMDSv2.
+              echo "Configuring eth1 on Bottlerocket via IMDSv2"
+              TOKEN=$(curl -s -f -X PUT "http://169.254.169.254/latest/api/token" \
+                         -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
+              MAC=$(cat /sys/class/net/eth1/address | tr -d ' \n')
+              meta() {
+                curl -s -f -H "X-aws-ec2-metadata-token: ${TOKEN}" \
+                  "http://169.254.169.254/latest/meta-data/network/interfaces/macs/${MAC}/$1"
+              }
+              CIDR_BLOCK=$(meta subnet-ipv4-cidr-block)
+              PREFIX_LEN="${CIDR_BLOCK#*/}"
+              case "${ETH1_IP}" in
+                *.*.*.*) ;;
+                *)
+                  echo "ERROR: secondary ENI IP is not a usable IPv4 address: '${ETH1_IP}'" >&2
+                  exit 1
+                  ;;
+              esac
+              case "${PREFIX_LEN}" in
+                ''|*[!0-9]*)
+                  echo "ERROR: IMDSv2 did not return a usable subnet prefix: '${CIDR_BLOCK}'" >&2
+                  exit 1
+                  ;;
+              esac
+              ip link set eth1 up
+              ip addr replace "${ETH1_IP}/${PREFIX_LEN}" dev eth1
+
+              # 3. Policy-based routing: traffic sourced from the ENI IP
+              #    goes out through eth1 via the subnet's default gateway.
+              GW="${ETH1_GW}"
+              ip route replace default via "${GW}" dev eth1 table 100
+              if ! ip rule show | grep -q "from ${ETH1_IP} lookup 100"; then
+                ip rule add from "${ETH1_IP}" lookup 100
+              fi
+              # Answer ARP only for our own IPs, and only on eth1.
+              echo 1 > /proc/sys/net/ipv4/conf/eth1/arp_ignore
+              echo 2 > /proc/sys/net/ipv4/conf/eth1/arp_announce
+
+              # Report the final state
+              ip -4 addr show eth1
+              ip route show table 100
+              ip rule show
+              echo "cxl node initialization complete for ${ETH1_IP} via ${GW}"
