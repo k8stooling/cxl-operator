@@ -15,7 +15,7 @@ egress_gateway_ready_taint_effect: "NoSchedule"
 aws_region: "{{ lookup('env', 'AWS_REGION') | default('us-east-1', true) }}"
 
 subnet_tag_key_label: "cxl.io/subnet-tag-key"
-subnet_tag_value_label: "cxl.io/subnet-key-value"
+subnet_tag_value_label: "cxl.io/subnet-tag-value"
 subnet_ids_label: "cxl.io/subnet-ids"
 
 secondary_eni_device_index: "{{ lookup('env', 'SECONDARY_ENI_DEVICE_INDEX') | default('1', true) | int }}"

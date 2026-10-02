@@ -12,7 +12,7 @@ spec:
       labels:
         cxl.io/vpc-type: proxy
         cxl.io/subnet-tag-key: caas.io/nodepool
-        cxl.io/subnet-key-value: proxy-example
+        cxl.io/subnet-tag-value: proxy-example
     spec:
       taints:
         - key: cxl.io/egress-not-ready

@@ -45,7 +45,7 @@ Subnet selection is not a single global operator setting in this version. The pr
 
 | Labels | Meaning |
 |-------|---------|
-| `cxl.io/subnet-tag-key` + `cxl.io/subnet-key-value` | Select candidate secondary subnets by AWS tag. |
+| `cxl.io/subnet-tag-key` + `cxl.io/subnet-tag-value` | Select candidate secondary subnets by AWS tag. |
 | `cxl.io/subnet-ids` | Comma-separated list of candidate subnet IDs. |
 
 The proxy nodepool must also provide `cxl.io/vpc-id` to constrain subnet lookup to the correct VPC and `cxl.io/security-group` to name the security group attached to the secondary ENI.
