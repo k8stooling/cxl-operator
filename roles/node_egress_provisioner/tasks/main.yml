@@ -266,6 +266,9 @@
             | reject('equalto', '')
             | list
           }}
+
+    - name: Combine excluded CIDR lists
+      ansible.builtin.set_fact:
         egress_policy_excluded_cidrs: >-
           {{
             (
