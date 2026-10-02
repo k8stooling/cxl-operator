@@ -4,6 +4,12 @@ kind: PolicyException
 metadata:
   name: {{ include "cxl-operator.fullname" . }}-eni-init
   namespace: {{ include "cxl-operator.nodeInitializerNamespace" . }}
+  annotations:
+    # The exception must exist before Kyverno evaluates the operator Deployment
+    # and the Jobs/Pods it creates.
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
   labels:
     {{- include "cxl-operator.labels" . | nindent 4 }}
 spec:
@@ -17,8 +23,11 @@ spec:
     any:
       - resources:
           kinds:
+            - Deployment
             - Job
             - Pod
           names:
+            - {{ include "cxl-operator.fullname" . }}
+            - {{ include "cxl-operator.fullname" . }}-*
             - cxl-eni-init-*
 {{- end }}

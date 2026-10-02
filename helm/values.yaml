@@ -41,7 +41,7 @@ podLabels: {}
 podSecurityContext:
   runAsNonRoot: true
   seccompProfile:
-  type: RuntimeDefault
+    type: RuntimeDefault
   # fsGroup: 2000
 
 securityContext:
