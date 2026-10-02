@@ -1,6 +1,8 @@
 ---
 nodepool_label_key: "cxl.io/vpc-type"
 nodepool_label_value: "proxy"
+vpc_id_label: "cxl.io/vpc-id"
+security_group_label: "cxl.io/security-group"
 zone_label_key: "topology.kubernetes.io/zone"
 
 secondary_eni_id_annotation: "network.infrastructure.io/secondary-eni-id"

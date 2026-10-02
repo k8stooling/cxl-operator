@@ -2,6 +2,8 @@
 # Only CiliumNodes carrying this label are reconciled by this role.
 nodepool_label_key: "cxl.io/vpc-type"
 nodepool_label_value: "proxy"
+vpc_id_label: "cxl.io/vpc-id"
+security_group_label: "cxl.io/security-group"
 
 # Label holding the node's availability zone.
 zone_label_key: "topology.kubernetes.io/zone"

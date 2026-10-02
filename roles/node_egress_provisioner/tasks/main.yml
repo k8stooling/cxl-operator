@@ -49,6 +49,16 @@
 
     - name: Resolve the node-provided secondary subnet selector labels
       ansible.builtin.set_fact:
+        node_vpc_id: >-
+          {{
+            ((cilium_node.metadata.labels | default({}))[vpc_id_label | default('')] | default(''))
+            | default((cilium_node.spec.labels | default({}))[vpc_id_label | default('')] | default(''), true)
+          }}
+        node_security_groups_raw: >-
+          {{
+            ((cilium_node.metadata.labels | default({}))[security_group_label | default('')] | default(''))
+            | default((cilium_node.spec.labels | default({}))[security_group_label | default('')] | default(''), true)
+          }}
         node_subnet_tag_key: >-
           {{
             ((cilium_node.metadata.labels | default({}))[subnet_tag_key_label | default('')] | default(''))
@@ -69,6 +79,18 @@
       ansible.builtin.set_fact:
         node_secondary_subnet_id_list: >-
           {{ (node_subnet_ids_raw | default('')) | string | split(',') | map('trim') | select | list }}
+
+    - name: Normalize the node-provided security-group list
+      ansible.builtin.set_fact:
+        node_security_groups: >-
+          {{ (node_security_groups_raw | default('')) | string | split(',') | map('trim') | select | list }}
+
+    - name: Ensure the proxy node defines VPC and security-group labels
+      ansible.builtin.fail:
+        msg: >-
+          Node {{ cilium_node_name }} must provide both {{ vpc_id_label }} and
+          {{ security_group_label }}.
+      when: node_vpc_id | trim | length == 0 or node_security_groups | length == 0
 
     - name: Ensure exactly one node subnet selector source is configured
       ansible.builtin.fail:
@@ -119,18 +141,21 @@
           CiliumNode {{ cilium_node_name }} / instance {{ ec2_instance_id }}.
       when: node_subnet_id | length == 0 or node_az | trim | length == 0
 
-    - name: Look up the candidate secondary subnets
-      amazon.aws.ec2_vpc_net_info:
+    - name: Look up the candidate secondary subnets by subnet IDs
+      amazon.aws.ec2_vpc_subnet_info:
         region: "{{ aws_region }}"
-        filters: "{{ subnet_query_filters }}"
+        subnet_ids: "{{ node_secondary_subnet_id_list }}"
       register: candidate_subnets_res
-      vars:
-        subnet_query_filters: >-
-          {{
-            {'subnet-id': node_secondary_subnet_id_list}
-            if node_secondary_subnet_id_list | length > 0
-            else {('tag:' + node_subnet_tag_key): node_subnet_tag_value}
-          }}
+      when: node_secondary_subnet_id_list | length > 0
+
+    - name: Look up the candidate secondary subnets by tag and VPC
+      amazon.aws.ec2_vpc_subnet_info:
+        region: "{{ aws_region }}"
+        filters:
+          vpc-id: "{{ node_vpc_id }}"
+          "tag:{{ node_subnet_tag_key }}": "{{ node_subnet_tag_value }}"
+      register: candidate_subnets_res
+      when: node_secondary_subnet_id_list | length == 0
 
     - name: Select the candidate subnet matching the node subnet
       ansible.builtin.set_fact:
@@ -138,6 +163,7 @@
           {{
             (
               candidate_subnets_res.subnets | default([])
+              | selectattr('vpc_id', 'equalto', node_vpc_id)
               | selectattr('subnet_id', 'equalto', node_subnet_id)
               | list
               | sort(attribute='subnet_id')
@@ -146,6 +172,7 @@
             | default(
                 (
                   candidate_subnets_res.subnets | default([])
+                  | selectattr('vpc_id', 'equalto', node_vpc_id)
                   | selectattr('availability_zone', 'equalto', node_az)
                   | list
                   | sort(attribute='subnet_id')
@@ -159,8 +186,9 @@
     - name: Fail when no secondary subnet matches the node subnet selection
       ansible.builtin.fail:
         msg: >-
-          No secondary subnet found for node {{ cilium_node_name }} in subnet
-          {{ node_subnet_id }} (AZ {{ node_az }}) using {{ subnet_ids_label }}={{ node_secondary_subnet_id_list | join(', ') }}
+          No secondary subnet found for node {{ cilium_node_name }} in VPC
+          {{ node_vpc_id }} and subnet {{ node_subnet_id }} (AZ {{ node_az }})
+          using {{ subnet_ids_label }}={{ node_secondary_subnet_id_list | join(', ') }}
           or {{ subnet_tag_key_label }}={{ node_subnet_tag_key }}, {{ subnet_tag_value_label }}={{ node_subnet_tag_value }}.
       when: selected_subnet.keys() | length == 0
 
@@ -189,6 +217,7 @@
         device_index: "{{ secondary_eni_device_index | int }}"
         name: "{{ secondary_eni_name_prefix }}-{{ cilium_node_name }}"
         description: "Managed by cxl-operator for {{ cilium_node_name }}"
+        security_groups: "{{ node_security_groups }}"
         tags:
           "{{ secondary_eni_tag_key }}": "{{ cilium_node_name }}"
           kubernetes.io/created-by: cxl-operator
@@ -203,6 +232,7 @@
         attached: true
         device_index: "{{ secondary_eni_device_index | int }}"
         delete_on_termination: true
+        security_groups: "{{ node_security_groups }}"
       when: existing_eni.keys() | length > 0
 
     - name: Re-read the secondary ENI after create or reuse
