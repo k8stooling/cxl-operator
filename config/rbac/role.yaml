@@ -12,6 +12,7 @@ rules:
     resources:
       - secrets
       - pods
+      - pods/status
       - pods/exec
       - pods/log
     verbs:

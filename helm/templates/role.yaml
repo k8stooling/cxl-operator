@@ -8,7 +8,7 @@ metadata:
 rules:
   # Base operator rules
   - apiGroups: [""]
-    resources: [secrets, pods, pods/exec, pods/log]
+    resources: [secrets, pods, pods/status, pods/exec, pods/log]
     verbs: [create, delete, get, list, patch, update, watch]
   - apiGroups: ["apps"]
     resources: [deployments, daemonsets, replicasets, statefulsets]
