@@ -45,11 +45,14 @@ rules:
       - ""
     resources:
       - nodes
+      - nodes/finalizers
+      - nodes/status
     verbs:
       - get
       - list
       - watch
       - patch
+      - update
   - apiGroups:
       - batch
     resources:
@@ -65,9 +68,6 @@ rules:
   - apiGroups:
       - cilium.io
     resources:
-      - ciliumnodes
-      - ciliumnodes/status
-      - ciliumnodes/finalizers
       - ciliumegressgatewaypolicies
     verbs:
       - create

@@ -1,7 +1,7 @@
 ---
 # Example NodePool labels and taint contract for nodes that should be managed
-# by the cxl-operator. The operator watches CiliumNode resources created from
-# these nodes and expects the subnet selector labels to be present.
+# by the cxl-operator. The operator watches the resulting Kubernetes Nodes and
+# expects the subnet selector labels to be present.
 apiVersion: karpenter.sh/v1
 kind: NodePool
 metadata:

@@ -4,9 +4,9 @@ This is a Kubernetes Operator built with the Ansible Operator SDK. It manages a 
 
 The operator currently exposes two steady-state reconciliation loops plus a cleanup finalizer:
 
-1. `node_egress_provisioner` watches `CiliumNode` resources labeled `cxl.io/vpc-type=proxy`. For each matching node it resolves the EC2 instance, chooses the secondary subnet from node labels, creates or reuses a secondary ENI, stores the ENI ID and IP on the Kubernetes Node, stamps a deterministic `cxl.io/egress-gw` hash label, runs the Bottlerocket-compatible initializer Job, waits for Job success, removes the readiness taint, marks the node `cxl.io/egress-ready=true`, and applies a node-local `CiliumEgressGatewayPolicy`.
+1. `node_egress_provisioner` watches Kubernetes `Node` resources labeled `cxl.io/vpc-type=proxy`. For each matching node it resolves the EC2 instance, chooses the secondary subnet from node labels, creates or reuses a secondary ENI, stores the ENI ID and IP on the Kubernetes Node, stamps a deterministic `cxl.io/egress-gw` hash label, runs the Bottlerocket-compatible initializer Job, waits for Job success, removes the readiness taint, marks the node `cxl.io/egress-ready=true`, and applies a node-local `CiliumEgressGatewayPolicy`.
 2. `pod_topology_labeler` watches Pods and patches the ones scheduled onto proxy nodes. Once a Pod is scheduled, it reads the scheduled node's `cxl.io/egress-gw` hash and only patches the Pod when the node is also labeled `cxl.io/egress-ready=true`.
-3. `node_egress_cleanup` runs from the `cxl.io/eni-cleanup` finalizer on `CiliumNode` and tears down the ENI and matching egress policy when the node is being removed.
+3. `node_egress_cleanup` runs from the `cxl.io/eni-cleanup` finalizer on `Node` and tears down the ENI and matching egress policy when the node is being removed.
 
 The target model is a strict 1:1 mapping: one proxy node, one secondary ENI, one gateway hash, one egress policy. That avoids cross-node or cross-AZ hops.
 
@@ -135,6 +135,6 @@ export OPERATOR_IMAGE=ghcr.io/k8stooling/cxl-operator:dev
 molecule test -s default   # or -s kind
 ```
 
-> Note: reconciling `CiliumNode` objects requires Cilium to be installed in the
-> test cluster; the ENI provisioning path additionally requires AWS credentials
+> Note: reconciling `Node` objects requires the cluster node to be present in
+> the test cluster; the ENI provisioning path additionally requires AWS credentials
 > and nodepool-injected subnet selector labels on the reconciled nodes.

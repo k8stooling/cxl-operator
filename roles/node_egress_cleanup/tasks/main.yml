@@ -1,47 +1,39 @@
 ---
 - block:
-    - name: Fetch the CiliumNode resource for cleanup
-      kubernetes.core.k8s_info:
-        api_version: cilium.io/v2
-        kind: CiliumNode
-        name: "{{ ansible_operator_meta.name }}"
-      register: cilium_node_res
-
-    - name: Set cleanup facts
-      ansible.builtin.set_fact:
-        cilium_node: "{{ cilium_node_res.resources[0] if cilium_node_res.resources | length > 0 else {} }}"
-        cilium_node_name: >-
-          {{
-            (cilium_node_res.resources[0].spec.nodeName)
-            if cilium_node_res.resources | length > 0 and (cilium_node_res.resources[0].spec.nodeName | default('')) | trim | length > 0
-            else ansible_operator_meta.name
-          }}
-
-    - name: Fetch the Kubernetes Node backing the CiliumNode
+    - name: Fetch the Kubernetes Node resource for cleanup
       kubernetes.core.k8s_info:
         api_version: v1
         kind: Node
-        name: "{{ cilium_node_name }}"
-      register: k8s_node_res
-      failed_when: false
+        name: "{{ ansible_operator_meta.name }}"
+      register: node_res
+
+    - name: Set cleanup facts
+      ansible.builtin.set_fact:
+        node_resource: "{{ node_res.resources[0] if node_res.resources | length > 0 else {} }}"
+        node_name: >-
+          {{
+            (node_res.resources[0].metadata.name)
+            if node_res.resources | length > 0 and (node_res.resources[0].metadata.name | default('')) | trim | length > 0
+            else ansible_operator_meta.name
+          }}
 
     - name: Resolve cleanup state from the Node
       ansible.builtin.set_fact:
-        k8s_node: "{{ k8s_node_res.resources[0] if k8s_node_res.resources | length > 0 else {} }}"
+        k8s_node: "{{ node_resource }}"
         secondary_eni_id: >-
-          {{ ((k8s_node_res.resources[0].metadata.annotations | default({}))[secondary_eni_id_annotation] | default('')) if k8s_node_res.resources | length > 0 else '' }}
+          {{ (node_resource.metadata.annotations | default({}))[secondary_eni_id_annotation] | default('') }}
         egress_gateway_hash: >-
-          {{ ((k8s_node_res.resources[0].metadata.labels | default({}))[egress_gateway_label_key] | default('')) if k8s_node_res.resources | length > 0 else '' }}
+          {{ (node_resource.metadata.labels | default({}))[egress_gateway_label_key] | default('') }}
 
     - name: Fallback to the deterministic gateway hash
       ansible.builtin.set_fact:
-        egress_gateway_hash: "{{ egress_gateway_hash if egress_gateway_hash | trim | length > 0 else (cilium_node_name | hash('sha1'))[:5] }}"
+        egress_gateway_hash: "{{ egress_gateway_hash if egress_gateway_hash | trim | length > 0 else (node_name | hash('sha1'))[:5] }}"
 
     - name: Fallback to ENI lookup by node tag
       amazon.aws.ec2_eni_info:
         region: "{{ aws_region }}"
         filters:
-          "tag:{{ secondary_eni_tag_key }}": "{{ cilium_node_name }}"
+          "tag:{{ secondary_eni_tag_key }}": "{{ node_name }}"
       register: cleanup_eni_lookup
       when: secondary_eni_id | trim | length == 0
 
@@ -97,4 +89,4 @@
   rescue:
     - name: Fail the cleanup playbook
       ansible.builtin.fail:
-        msg: "node_egress_cleanup playbook failed for CiliumNode {{ ansible_operator_meta.name }}. Check operator logs."
+        msg: "node_egress_cleanup playbook failed for Node {{ ansible_operator_meta.name }}. Check operator logs."

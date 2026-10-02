@@ -1,12 +1,12 @@
 ---
-# Two steady-state reconciliation loops plus a CiliumNode finalizer.
+# Two steady-state reconciliation loops plus a Node finalizer.
 #
-# 1. node_egress_provisioner: triggered by CiliumNode objects (cilium.io/v2).
-#    Only proxy CiliumNodes are reconciled; the role itself skips everything
+# 1. node_egress_provisioner: triggered by Node objects.
+#    Only proxy Nodes are reconciled; the role itself skips everything
 #    else and manages secondary ENI state plus per-node egress policy.
-- version: v2
-  group: cilium.io
-  kind: CiliumNode
+- version: v1
+  group: ""
+  kind: Node
   role: node_egress_provisioner
   reconcilePeriod: 30s
   finalizer:

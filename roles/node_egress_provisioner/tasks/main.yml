@@ -1,78 +1,67 @@
 ---
 - block:
-    - name: Fetch the CiliumNode resource
+    - name: Fetch the Kubernetes Node resource
       kubernetes.core.k8s_info:
-        api_version: cilium.io/v2
-        kind: CiliumNode
+        api_version: v1
+        kind: Node
         name: "{{ ansible_operator_meta.name }}"
-      register: cilium_node_res
+      register: node_res
 
-    - name: Set CiliumNode fact
+    - name: Set Node fact
       ansible.builtin.set_fact:
-        cilium_node: "{{ cilium_node_res.resources[0] if cilium_node_res.resources | length > 0 else {} }}"
+        node_resource: "{{ node_res.resources[0] if node_res.resources | length > 0 else {} }}"
 
     - name: Extract the Kubernetes node name
       ansible.builtin.set_fact:
-        cilium_node_name: "{{ cilium_node.spec.nodeName | default(ansible_operator_meta.name) }}"
+        cilium_node_name: "{{ node_resource.metadata.name | default(ansible_operator_meta.name) }}"
 
     - name: Skip nodes that are not in the proxy nodepool
       ansible.builtin.meta: end_host
       when: >-
-        (cilium_node.metadata.labels | default({})).get(
+        (node_resource.metadata.labels | default({})).get(
           nodepool_label_key | default(''), ''
         ) != nodepool_label_value
 
-    - name: Validate CiliumNode instance ID
+    - name: Validate Node provider ID
       ansible.builtin.fail:
-        msg: "CiliumNode {{ cilium_node_name }} has no spec['instance-id'] set"
-      when: (cilium_node.spec['instance-id'] | default('') | trim | length) == 0
+        msg: "Node {{ cilium_node_name }} has no spec.providerID set"
+      when: (node_resource.spec.providerID | default('') | trim | length) == 0
 
-    - name: Set the EC2 instance ID from CiliumNode
+    - name: Set the EC2 instance ID from Node providerID
       ansible.builtin.set_fact:
-        ec2_instance_id: "{{ (cilium_node.spec['instance-id'] | default('')) | trim }}"
+        ec2_instance_id: >-
+          {{ (node_resource.spec.providerID | regex_search('i-[0-9a-f]{8,17}')) | default('', true) }}
 
     - name: Validate parsed EC2 instance ID
       ansible.builtin.fail:
-        msg: "Could not parse EC2 instance ID from spec['instance-id'] '{{ cilium_node.spec['instance-id'] | default('') }}'"
+        msg: "Could not parse EC2 instance ID from spec.providerID '{{ node_resource.spec.providerID | default('') }}'"
       when: not ec2_instance_id is match('^i-0[0-9a-f]{8,17}$')
-
-    - name: Fetch the Kubernetes Node
-      kubernetes.core.k8s_info:
-        api_version: v1
-        kind: Node
-        name: "{{ cilium_node_name }}"
-      register: k8s_node_res
 
     - name: Set Node fact
       ansible.builtin.set_fact:
-        k8s_node: "{{ k8s_node_res.resources[0] if k8s_node_res.resources | length > 0 else {} }}"
+        k8s_node: "{{ node_resource }}"
 
     - name: Resolve the node-provided secondary subnet selector labels
       ansible.builtin.set_fact:
         node_vpc_id: >-
           {{
-            ((cilium_node.metadata.labels | default({}))[vpc_id_label | default('')] | default(''))
-            | default((cilium_node.spec.labels | default({}))[vpc_id_label | default('')] | default(''), true)
+            (node_resource.metadata.labels | default({}))[vpc_id_label | default('')] | default('')
           }}
         node_security_groups_raw: >-
           {{
-            ((cilium_node.metadata.labels | default({}))[security_group_label | default('')] | default(''))
-            | default((cilium_node.spec.labels | default({}))[security_group_label | default('')] | default(''), true)
+            (node_resource.metadata.labels | default({}))[security_group_label | default('')] | default('')
           }}
         node_subnet_tag_key: >-
           {{
-            ((cilium_node.metadata.labels | default({}))[subnet_tag_key_label | default('')] | default(''))
-            | default((cilium_node.spec.labels | default({}))[subnet_tag_key_label | default('')] | default(''), true)
+            (node_resource.metadata.labels | default({}))[subnet_tag_key_label | default('')] | default('')
           }}
         node_subnet_tag_value: >-
           {{
-            ((cilium_node.metadata.labels | default({}))[subnet_tag_value_label | default('')] | default(''))
-            | default((cilium_node.spec.labels | default({}))[subnet_tag_value_label | default('')] | default(''), true)
+            (node_resource.metadata.labels | default({}))[subnet_tag_value_label | default('')] | default('')
           }}
         node_subnet_ids_raw: >-
           {{
-            ((cilium_node.metadata.labels | default({}))[subnet_ids_label | default('')] | default(''))
-            | default((cilium_node.spec.labels | default({}))[subnet_ids_label | default('')] | default(''), true)
+            (node_resource.metadata.labels | default({}))[subnet_ids_label | default('')] | default('')
           }}
 
     - name: Normalize the node-provided subnet ID list
@@ -124,21 +113,23 @@
         existing_secondary_eni_ip: >-
           {{ (k8s_node.metadata.annotations | default({}))[secondary_eni_annotation | default('')] | default('') }}
 
+    - name: Look up the node EC2 instance
+      amazon.aws.ec2_instance_info:
+        region: "{{ aws_region }}"
+        instance_ids:
+          - "{{ ec2_instance_id }}"
+      register: node_instance_info
+
     - name: Determine the node subnet and availability zone
       ansible.builtin.set_fact:
-        node_subnet_id: "{{ (cilium_node.spec.eni['node-subnet-id'] | default('')) | trim }}"
-        node_az: >-
-          {{
-            (cilium_node.spec.eni['availability-zone'] | default(''))
-            | default((cilium_node.metadata.labels | default({}))[zone_label_key | default('')] | default(''), true)
-            | default((cilium_node.spec.labels | default({}))[zone_label_key | default('')] | default(''), true)
-          }}
+        node_subnet_id: "{{ (node_instance_info.instances[0].subnet_id | default('')) | trim }}"
+        node_az: "{{ (node_instance_info.instances[0].placement.availability_zone | default('')) | trim }}"
 
     - name: Fail when the node subnet or availability zone could not be determined
       ansible.builtin.fail:
         msg: >-
           Could not determine the primary subnet or availability zone from
-          CiliumNode {{ cilium_node_name }} / instance {{ ec2_instance_id }}.
+          Node {{ cilium_node_name }} / instance {{ ec2_instance_id }}.
       when: node_subnet_id | length == 0 or node_az | trim | length == 0
 
     - name: Look up the candidate secondary subnets by subnet IDs
@@ -441,16 +432,6 @@
               interface: eth1
 
   rescue:
-    - name: Update CiliumNode status (Failed)
-      operator_sdk.util.k8s_status:
-        api_version: cilium.io/v2
-        kind: CiliumNode
-        name: "{{ ansible_operator_meta.name }}"
-        status:
-          reconciliationState: "Failed"
-          errorMessage: "The Ansible playbook encountered an error. Check operator logs."
-          lastSynced: "{{ lookup('pipe', 'date -u +\"%Y-%m-%dT%H:%M:%SZ\"') }}"
-
     - name: Fail the playbook so Kubernetes knows it failed
       ansible.builtin.fail:
-        msg: "node_egress_provisioner playbook failed for CiliumNode {{ ansible_operator_meta.name }}. Status updated."
+        msg: "node_egress_provisioner playbook failed for Node {{ ansible_operator_meta.name }}."

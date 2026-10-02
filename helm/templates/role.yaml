@@ -8,20 +8,17 @@ metadata:
 rules:
   # Base operator rules
   - apiGroups: [""]
-    resources: [secrets, pods, pods/status, pods/exec, pods/log]
+    resources: [secrets, pods, pods/status, pods/exec, pods/log, nodes, nodes/finalizers, nodes/status]
     verbs: [create, delete, get, list, patch, update, watch]
   - apiGroups: ["apps"]
     resources: [deployments, daemonsets, replicasets, statefulsets]
     verbs: [create, delete, get, list, patch, update, watch]
   # CXL operator rules
-  - apiGroups: [""]
-    resources: [nodes]
-    verbs: [get, list, watch, patch]
   - apiGroups: ["batch"]
     resources: [jobs]
     verbs: [create, delete, get, list, patch, update, watch]
   - apiGroups: ["cilium.io"]
-    resources: [ciliumnodes, ciliumnodes/status, ciliumnodes/finalizers, ciliumegressgatewaypolicies]
+    resources: [ciliumegressgatewaypolicies]
     verbs: [create, delete, get, list, watch, patch, update]
   {{- with .Values.extraClusterRoleRules }}
   {{ toYaml . | indent 2 }}
