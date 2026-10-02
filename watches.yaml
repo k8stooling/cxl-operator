@@ -13,12 +13,11 @@
     name: cxl.io/eni-cleanup
     role: node_egress_cleanup
 
-# 2. pod_topology_labeler: triggered by proxy Pod changes. The role patches
-#    scheduled Pods with the node-local gateway hash so exactly one
-#    CiliumEgressGatewayPolicy selects them.
+# 2. pod_topology_labeler: triggered by Pod changes. The role patches
+#    scheduled Pods running on proxy nodes with the node-local gateway hash so
+#    exactly one CiliumEgressGatewayPolicy selects them.
 - version: v1
   group: ""
   kind: Pod
   role: pod_topology_labeler
-  label_selector: "cxl.io/vpc-type=proxy"
   reconcilePeriod: 15s

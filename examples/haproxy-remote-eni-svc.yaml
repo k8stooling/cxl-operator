@@ -1,15 +1,13 @@
 ---
-# Example proxy workload Pod carrying the trigger label watched by the
-# pod_topology_labeler role. Once scheduled, the operator will patch this Pod
-# with cxl.io/egress-gw=<node-hash> to bind it to the correct node-local
-# CiliumEgressGatewayPolicy.
+# Example proxy workload Pod. Once scheduled onto a proxy node, the operator
+# will patch this Pod with cxl.io/egress-gw=<node-hash> to bind it to the
+# correct node-local CiliumEgressGatewayPolicy.
 apiVersion: v1
 kind: Pod
 metadata:
   name: haproxy-remote-eni
   labels:
     app.kubernetes.io/name: haproxy-remote-eni
-    cxl.io/vpc-type: proxy
 spec:
   restartPolicy: Always
   containers:

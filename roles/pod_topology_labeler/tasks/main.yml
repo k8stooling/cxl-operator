@@ -1,12 +1,17 @@
 ---
 - block:
     - name: Fetch the Pod resource
+      no_log: true
       kubernetes.core.k8s_info:
         api_version: v1
         kind: Pod
         name: "{{ ansible_operator_meta.name }}"
         namespace: "{{ ansible_operator_meta.namespace }}"
       register: pod_res
+
+    - name: Log the Pod identity
+      ansible.builtin.debug:
+        msg: "pod_topology_labeler processing Pod {{ ansible_operator_meta.namespace }}/{{ ansible_operator_meta.name }}"
 
     - name: Set Pod fact
       ansible.builtin.set_fact:
@@ -15,10 +20,6 @@
     - name: Skip missing Pods
       ansible.builtin.meta: end_host
       when: pod_resource.keys() | length == 0
-
-    - name: Skip Pods that are not proxy workloads
-      ansible.builtin.meta: end_host
-      when: (pod_resource.metadata.labels | default({}))[proxy_pod_label_key | default('')] != proxy_pod_label_value
 
     - name: Skip unscheduled Pods
       ansible.builtin.meta: end_host

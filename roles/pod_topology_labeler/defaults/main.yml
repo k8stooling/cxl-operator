@@ -1,5 +1,3 @@
 ---
-proxy_pod_label_key: "cxl.io/vpc-type"
-proxy_pod_label_value: "proxy"
 egress_gateway_label_key: "cxl.io/egress-gw"
 egress_gateway_ready_label_key: "cxl.io/egress-ready"

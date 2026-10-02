@@ -5,7 +5,7 @@ This is a Kubernetes Operator built with the Ansible Operator SDK. It manages a 
 The operator currently exposes two steady-state reconciliation loops plus a cleanup finalizer:
 
 1. `node_egress_provisioner` watches `CiliumNode` resources labeled `cxl.io/vpc-type=proxy`. For each matching node it resolves the EC2 instance, chooses the secondary subnet from node labels, creates or reuses a secondary ENI, stores the ENI ID and IP on the Kubernetes Node, stamps a deterministic `cxl.io/egress-gw` hash label, runs the Bottlerocket-compatible initializer Job, waits for Job success, removes the readiness taint, marks the node `cxl.io/egress-ready=true`, and applies a node-local `CiliumEgressGatewayPolicy`.
-2. `pod_topology_labeler` watches proxy Pods labeled `cxl.io/vpc-type=proxy`. Once a Pod is scheduled, it reads the scheduled node's `cxl.io/egress-gw` hash and only patches the Pod when the node is also labeled `cxl.io/egress-ready=true`.
+2. `pod_topology_labeler` watches Pods and patches the ones scheduled onto proxy nodes. Once a Pod is scheduled, it reads the scheduled node's `cxl.io/egress-gw` hash and only patches the Pod when the node is also labeled `cxl.io/egress-ready=true`.
 3. `node_egress_cleanup` runs from the `cxl.io/eni-cleanup` finalizer on `CiliumNode` and tears down the ENI and matching egress policy when the node is being removed.
 
 The target model is a strict 1:1 mapping: one proxy node, one secondary ENI, one gateway hash, one egress policy. That avoids cross-node or cross-AZ hops.
@@ -108,7 +108,7 @@ configures routing on the node.
 
 ### Supporting manifests
 
-The operator is not tied to one proxy implementation, but the watched Pods must carry `cxl.io/vpc-type=proxy` so the pod labeler can bind them to the correct node-local gateway policy.
+The operator is not tied to one proxy implementation. The pod labeler now watches Pods directly and uses the scheduled node's egress labels to decide whether a Pod should receive `cxl.io/egress-gw`.
 
 The examples in [examples](examples) show the new proxy workload and nodepool label contract rather than the removed selectorless Service pattern.
 
