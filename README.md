@@ -58,9 +58,53 @@ The operator uses those labels to discover candidate secondary subnets and then 
 | `aws.secretName` | *(optional)* Secret with static AWS credentials; otherwise the operator relies on the node's IAM role / instance profile. |
 | `nodeInitializerImage` | Image for the node initializer Job (needs `iproute2` + `curl`). |
 | `nodeInitializerJobNamespace` | Namespace for the initializer Jobs. Defaults to the operator namespace. |
-| `kyvernoPolicyException.*` | Controls the Helm-managed Kyverno `PolicyException` allowing the initializer Jobs to bypass `psp-restricted` in policy `kyverno-policies-3.8.2`. |
+| `kyvernoPolicyException.*` | Controls the pre-install/pre-upgrade Kyverno `PolicyException` allowing the operator Deployment/Pods and initializer Jobs/Pods to bypass `psp-restricted` in policy `kyverno-policies-3.8.2`. |
 | `egressPolicyExcludedCidrs` | CIDRs excluded from `0.0.0.0/0` in the generated `CiliumEgressGatewayPolicy`. Defaults to `10.96.0.0/12`; add the cluster VPC CIDR at deploy time. |
 | `watchNamespace` | Restrict the operator to one namespace. Empty = all. |
+
+### AWS IAM permissions
+
+The operator's AWS identity is used only for EC2/VPC discovery and secondary
+network-interface lifecycle management. It must be available to the operator
+Pod through IRSA/workload identity, the node or instance profile, or the
+optional static-credentials Secret. The minimum EC2 actions are:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeSubnets",
+        "ec2:DescribeRouteTables",
+        "ec2:DescribeInternetGateways",
+        "ec2:DescribeNetworkInterfaces",
+        "ec2:CreateNetworkInterface",
+        "ec2:CreateTags",
+        "ec2:AttachNetworkInterface",
+        "ec2:ModifyNetworkInterfaceAttribute",
+        "ec2:DetachNetworkInterface",
+        "ec2:DeleteNetworkInterface"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+These permissions support selecting subnets by ID or tag, resolving the
+subnet route and internet gateway, finding an existing ENI, creating and
+tagging a secondary ENI, attaching it to the node instance, enforcing
+`DeleteOnTermination`, and detaching/deleting it during cleanup. The
+`DescribeNetworkInterfaces` permission is also required by the cleanup
+fallback when the ENI ID is not present on the Kubernetes Node.
+
+The policy can be restricted further with IAM conditions and resource scoping
+for the target VPC, subnets, instances, and ENI tags. Keep the describe
+actions on `Resource: "*"`, as required by the EC2 API. No IAM permissions are
+needed by the node initializer Job: it reads instance metadata locally and
+configures routing on the node.
 
 ### Supporting manifests
 
