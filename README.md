@@ -46,7 +46,7 @@ Subnet selection is not a single global operator setting in this version. The pr
 | Labels | Meaning |
 |-------|---------|
 | `cxl.io/subnet-tag-key` + `cxl.io/subnet-key-value` | Select candidate secondary subnets by AWS tag. |
-| `cxl.io/subnet-iids` | Comma-separated list of candidate subnet IDs. |
+| `cxl.io/subnet-ids` | Comma-separated list of candidate subnet IDs. |
 
 The operator uses those labels to discover candidate secondary subnets and then picks the one matching the node's primary subnet or availability zone.
 

@@ -16,7 +16,7 @@ aws_region: "us-east-1"
 # candidates may be used for the node being reconciled.
 subnet_tag_key_label: "cxl.io/subnet-tag-key"
 subnet_tag_value_label: "cxl.io/subnet-key-value"
-subnet_ids_label: "cxl.io/subnet-iids"
+subnet_ids_label: "cxl.io/subnet-ids"
 
 # Device index the secondary ENI is attached at (0 is the primary ENI).
 secondary_eni_device_index: 1

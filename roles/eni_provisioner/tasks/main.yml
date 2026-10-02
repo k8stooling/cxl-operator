@@ -28,7 +28,10 @@
 
     - name: Skip nodes that are not in the proxy nodepool
       ansible.builtin.meta: end_host
-      when: (cilium_node.metadata.labels | default({}))[nodepool_label_key | default('')] != nodepool_label_value
+      when: >-
+        (cilium_node.metadata.labels | default({})).get(
+          nodepool_label_key | default(''), ''
+        ) != nodepool_label_value
 
     # 2. Extract the EC2 instance ID and node network placement from the CiliumNode
     - name: Validate CiliumNode instance ID
