@@ -148,37 +148,26 @@
       register: candidate_subnets_res
       when: node_secondary_subnet_id_list | length == 0
 
-    - name: Select the candidate subnet matching the node subnet
+    - name: Select the candidate subnet matching the node availability zone
       ansible.builtin.set_fact:
         selected_subnet: >-
           {{
             (
               candidate_subnets_res.subnets | default([])
               | selectattr('vpc_id', 'equalto', node_vpc_id)
-              | selectattr('subnet_id', 'equalto', node_subnet_id)
+              | selectattr('availability_zone', 'equalto', node_az)
               | list
               | sort(attribute='subnet_id')
               | first
             )
-            | default(
-                (
-                  candidate_subnets_res.subnets | default([])
-                  | selectattr('vpc_id', 'equalto', node_vpc_id)
-                  | selectattr('availability_zone', 'equalto', node_az)
-                  | list
-                  | sort(attribute='subnet_id')
-                  | first
-                ),
-                true
-              )
             | default({}, true)
           }}
 
     - name: Fail when no secondary subnet matches the node subnet selection
       ansible.builtin.fail:
         msg: >-
-          No secondary subnet found for node {{ cilium_node_name }} in VPC
-          {{ node_vpc_id }} and subnet {{ node_subnet_id }} (AZ {{ node_az }})
+          No secondary subnet found for node {{ cilium_node_name }} in target VPC
+          {{ node_vpc_id }} and availability zone {{ node_az }}
           using {{ subnet_ids_label }}={{ node_secondary_subnet_id_list | join(', ') }}
           or {{ subnet_tag_key_label }}={{ node_subnet_tag_key }}, {{ subnet_tag_value_label }}={{ node_subnet_tag_value }}.
       when: selected_subnet.keys() | length == 0
