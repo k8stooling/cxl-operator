@@ -139,29 +139,34 @@
       register: candidate_subnets_res
       when: node_secondary_subnet_id_list | length > 0
 
-    - name: Look up the candidate secondary subnets by tag and VPC
+    - name: Look up the candidate secondary subnets by target VPC
       amazon.aws.ec2_vpc_subnet_info:
         region: "{{ aws_region }}"
         filters:
           vpc-id: "{{ node_vpc_id }}"
-          "tag:{{ node_subnet_tag_key }}": "{{ node_subnet_tag_value }}"
       register: candidate_subnets_res
       when: node_secondary_subnet_id_list | length == 0
 
+    - name: Initialize the selected subnet fact
+      ansible.builtin.set_fact:
+        selected_subnet: {}
+
     - name: Select the candidate subnet matching the node availability zone
       ansible.builtin.set_fact:
-        selected_subnet: >-
-          {{
-            (
-              candidate_subnets_res.subnets | default([])
-              | selectattr('vpc_id', 'equalto', node_vpc_id)
-              | selectattr('availability_zone', 'equalto', node_az)
-              | list
-              | sort(attribute='subnet_id')
-              | first
-            )
-            | default({}, true)
-          }}
+        selected_subnet: "{{ item }}"
+      loop: >-
+        {{
+          candidate_subnets_res.subnets | default([])
+          | selectattr('vpc_id', 'equalto', node_vpc_id)
+          | sort(attribute='subnet_id')
+          | list
+        }}
+      loop_control:
+        label: "{{ item.subnet_id | default('') }}"
+      when:
+        - selected_subnet.keys() | length == 0
+        - (item.availability_zone | default('')) == node_az
+        - ((item.tags | default({}))[node_subnet_tag_key] | default('')) == node_subnet_tag_value
 
     - name: Fail when no secondary subnet matches the node subnet selection
       ansible.builtin.fail:
