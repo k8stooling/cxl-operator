@@ -152,6 +152,35 @@ The operator is not tied to one proxy implementation. In `pod-label` mode the po
 
 The examples in [examples](examples) show the new proxy workload and nodepool label contract rather than the removed selectorless Service pattern.
 
+### Minimal proxy NodePool example
+
+This is a minimal Karpenter `NodePool` skeleton with the required configuration. The operator uses these labels to discover the subnet, security group, and VPC for the secondary ENI. The startup taint prevents workloads being scheduled on a node that doesn't have the egress interface.
+
+```yaml
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: proxy-xx
+spec:
+  limits: {}
+  weight: 99
+  disruption: {}
+  template:
+    metadata:
+      labels:
+        cxl.io/netzone: proxy-xx
+        cxl.io/security-group: proxy_xx
+        cxl.io/subnet-tag-key: type
+        cxl.io/subnet-tag-value: private
+        cxl.io/vpc-id: vpc-060b3412565b550a2
+        cxl.io/vpc-type: proxy
+    spec:
+      startupTaints:
+      - effect: NoSchedule
+        key: cxl.io/egress-not-ready
+        value: "true"
+```
+
 ## Development
 
 ```bash
