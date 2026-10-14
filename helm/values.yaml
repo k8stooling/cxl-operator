@@ -127,8 +127,9 @@ aws:
   sessionTokenKey: "AWS_SESSION_TOKEN"
 
 # Image for the privileged Bottlerocket node initializer Job. Must include
-# iproute2 and curl; IMDSv2 assigns the secondary ENI IP.
-nodeInitializerImage: "public.ecr.aws/amazonlinux/amazonlinux:2023"
+# iproute2, curl, and python3; IMDSv2 assigns the secondary ENI IP and the
+# initializer derives the subnet gateway locally.
+nodeInitializerImage: "docker.io/nicolaka/netshoot:latest"
 
 # Namespace in which the node initializer Jobs are created.
 # Empty = the operator's own namespace.
@@ -151,6 +152,15 @@ egressPolicyDefaultExcludedCidrs:
   - 10.96.0.0/12
 egressPolicyExcludedCidrs:
   - 172.20.0.0/16
+
+# Select how workloads are bound to node-local egress policies.
+# - pod-label: the legacy model; the operator patches Pods with cxl.io/egress-gw.
+# - static-workload-label: workloads opt in with a static label and the policy
+#   is scoped to Pods running on the current proxy node via selectors[].nodeSelector.
+egressRouting:
+  model: static-workload-label
+  workloadLabelKey: cxl.io/egress-routing
+  workloadLabelValue: "true"
 
 # Namespaces the operator watches. Empty watches all namespaces.
 watchNamespace: ""

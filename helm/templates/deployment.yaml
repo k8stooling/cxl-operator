@@ -73,6 +73,12 @@ spec:
               value: {{ join "," .Values.egressPolicyDefaultExcludedCidrs | quote }}
             - name: EGRESS_POLICY_EXCLUDED_CIDRS
               value: {{ join "," .Values.egressPolicyExcludedCidrs | quote }}
+            - name: EGRESS_ROUTING_MODEL
+              value: {{ .Values.egressRouting.model | quote }}
+            - name: EGRESS_ROUTING_WORKLOAD_LABEL_KEY
+              value: {{ .Values.egressRouting.workloadLabelKey | quote }}
+            - name: EGRESS_ROUTING_WORKLOAD_LABEL_VALUE
+              value: {{ .Values.egressRouting.workloadLabelValue | quote }}
             - name: WATCH_NAMESPACE
               value: {{ .Values.watchNamespace | default "" | quote }}
             - name: POD_NAME
@@ -102,14 +108,20 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- with .Values.volumeMounts }}
           volumeMounts:
+            - name: watches-config
+              mountPath: /opt/ansible/watches.yaml
+              subPath: watches.yaml
+          {{- with .Values.volumeMounts }}
             {{- toYaml . | nindent 12 }}
           {{- end }}
-      {{- with .Values.volumes }}
       volumes:
+        - name: watches-config
+          configMap:
+            name: {{ include "cxl-operator.fullname" . }}-watches
+        {{- with .Values.volumes }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

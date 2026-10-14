@@ -21,6 +21,8 @@ subnet_ids_label: "cxl.io/subnet-ids"
 secondary_eni_device_index: "{{ lookup('env', 'SECONDARY_ENI_DEVICE_INDEX') | default('1', true) | int }}"
 secondary_eni_tag_key: "cxl-node"
 secondary_eni_name_prefix: "cxl-secondary-eni"
+secondary_eni_cilium_ignore_tag_key: "cxl.io/cilium-ignore"
+secondary_eni_cilium_ignore_tag_value: "true"
 
 egress_policy_api_version: "cilium.io/v2"
 egress_policy_kind: "CiliumEgressGatewayPolicy"
@@ -29,8 +31,11 @@ egress_policy_destinations:
   - "0.0.0.0/0"
 egress_policy_default_excluded_cidrs_raw: "{{ lookup('env', 'EGRESS_POLICY_DEFAULT_EXCLUDED_CIDRS') | default('10.96.0.0/12', true) }}"
 egress_policy_excluded_cidrs_raw: "{{ lookup('env', 'EGRESS_POLICY_EXCLUDED_CIDRS') | default('', true) }}"
+egress_routing_model: "{{ lookup('env', 'EGRESS_ROUTING_MODEL') | default('pod-label', true) }}"
+egress_routing_workload_label_key: "{{ lookup('env', 'EGRESS_ROUTING_WORKLOAD_LABEL_KEY') | default('cxl.io/egress-routing', true) }}"
+egress_routing_workload_label_value: "{{ lookup('env', 'EGRESS_ROUTING_WORKLOAD_LABEL_VALUE') | default('true', true) }}"
 
-node_initializer_image: "{{ lookup('env', 'NODE_INITIALIZER_IMAGE') | default('public.ecr.aws/amazonlinux/amazonlinux:2023', true) }}"
+node_initializer_image: "{{ lookup('env', 'NODE_INITIALIZER_IMAGE') | default('docker.io/nicolaka/netshoot:latest', true) }}"
 node_initializer_job_namespace: "{{ lookup('env', 'NODE_INITIALIZER_JOB_NAMESPACE') | default('', true) }}"
 node_initializer_ttl_seconds: 3600
 node_initializer_eth1_wait_seconds: 300

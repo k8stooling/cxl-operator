@@ -1,5 +1,9 @@
 ---
 - block:
+    - name: Skip pod labeler when static workload label routing is enabled
+      ansible.builtin.meta: end_host
+      when: egress_routing_model != 'pod-label'
+
     - name: Fetch the Pod resource
       no_log: true
       kubernetes.core.k8s_info:

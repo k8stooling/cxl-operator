@@ -33,7 +33,7 @@ spec:
           image: "{{ node_initializer_image }}"
           imagePullPolicy: IfNotPresent
           securityContext:
-            privileged: false
+            privileged: true
             allowPrivilegeEscalation: true
             capabilities:
               add:
@@ -41,8 +41,6 @@ spec:
           env:
             - name: ETH1_IP
               value: "{{ secondary_eni_ip }}"
-            - name: ETH1_GW
-              value: "{{ secondary_eni_gateway }}"
             - name: ETH1_WAIT_SECONDS
               value: "{{ node_initializer_eth1_wait_seconds }}"
           command:
@@ -51,10 +49,9 @@ spec:
             - -c
           args:
             - |
-              set -eu
+              set -eux
 
               ETH1_IP="${ETH1_IP:?ETH1_IP must be set}"
-              ETH1_GW="${ETH1_GW:?ETH1_GW must be set}"
               WAIT="${ETH1_WAIT_SECONDS:-300}"
 
               i=0
@@ -76,17 +73,35 @@ spec:
               }
               CIDR_BLOCK=$(meta subnet-ipv4-cidr-block)
               PREFIX_LEN="${CIDR_BLOCK#*/}"
+              ETH1_GW=$(CIDR_BLOCK="${CIDR_BLOCK}" python3 -c 'import ipaddress, os; print(next(ipaddress.ip_network(os.environ["CIDR_BLOCK"], strict=False).hosts()))')
+              
+              echo "=== pre-change link state ==="
+              ip -4 addr show || true
+              echo "=== pre-change main routing table ==="
+              ip route show || true
+              echo "=== pre-change policy rules ==="
+              ip rule show || true
 
               ip link set eth1 up
               ip addr replace "${ETH1_IP}/${PREFIX_LEN}" dev eth1
+
               ip route replace default via "${ETH1_GW}" dev eth1 table 100
               if ! ip rule show | grep -q "from ${ETH1_IP} lookup 100"; then
                 ip rule add from "${ETH1_IP}" lookup 100
               fi
-              echo 1 > /proc/sys/net/ipv4/conf/eth1/arp_ignore
-              echo 2 > /proc/sys/net/ipv4/conf/eth1/arp_announce
+              if ! echo 1 > /proc/sys/net/ipv4/conf/eth1/arp_ignore; then
+                echo "WARN: could not set arp_ignore on eth1" >&2
+              fi
+              if ! echo 2 > /proc/sys/net/ipv4/conf/eth1/arp_announce; then
+                echo "WARN: could not set arp_announce on eth1" >&2
+              fi
 
+              echo "=== post-change eth1 state ==="
               ip -4 addr show eth1
+              echo "=== post-change main routing table ==="
+              ip route show
+              echo "=== post-change table 100 ==="
               ip route show table 100
+              echo "=== post-change policy rules ==="
               ip rule show
               echo "cxl node initialization complete for ${ETH1_IP} via ${ETH1_GW}"

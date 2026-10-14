@@ -55,35 +55,12 @@
         name: "{{ egress_policy_name_prefix }}-{{ egress_gateway_hash }}"
       failed_when: false
 
-    - name: Detach the ENI when present
-      amazon.aws.ec2_eni:
-        region: "{{ aws_region }}"
-        eni_id: "{{ secondary_eni_id }}"
-        attached: false
-        force_detach: true
-      when: secondary_eni_id | trim | length > 0
-
-    - name: Wait for the ENI to become available before deletion
-      amazon.aws.ec2_eni_info:
-        region: "{{ aws_region }}"
-        eni_id: "{{ secondary_eni_id }}"
-      register: cleanup_eni_state
-      retries: 10
-      delay: 6
-      until: >-
-        (cleanup_eni_state.network_interfaces | default(cleanup_eni_state.enis | default([])) | length) == 0
-        or
-        (
-          (cleanup_eni_state.network_interfaces | default(cleanup_eni_state.enis | default([])) | first).status
-          | default('')
-        ) == 'available'
-      when: secondary_eni_id | trim | length > 0
-
     - name: Delete the ENI when present
       amazon.aws.ec2_eni:
         region: "{{ aws_region }}"
         eni_id: "{{ secondary_eni_id }}"
         state: absent
+        force_detach: true
       when: secondary_eni_id | trim | length > 0
 
   rescue:

@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cxl-operator.fullname" . }}-watches
+  labels:
+    {{- include "cxl-operator.labels" . | nindent 4 }}
+data:
+  watches.yaml: |
+    ---
+    # 1. node_egress_provisioner: triggered by Node objects.
+    - version: v1
+      group: ""
+      kind: Node
+      role: node_egress_provisioner
+      reconcilePeriod: 30s
+      finalizer:
+        name: cxl.io/eni-cleanup
+        role: node_egress_cleanup
+    {{- if eq .Values.egressRouting.model "pod-label" }}
+
+    # 2. pod_topology_labeler: triggered by Pod changes only.
+    - version: v1
+      group: ""
+      kind: Pod
+      role: pod_topology_labeler
+    {{- end }}

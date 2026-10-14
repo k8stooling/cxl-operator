@@ -29,7 +29,7 @@ secondary_eni_tag_key: "kubernetes.io/cxl-secondary-eni"
 # ---- Node Initializer Job configuration ------------------------------------
 # Container image for the Bottlerocket node initializer Job. Must include
 # iproute2 and curl; interface configuration is done via IMDSv2.
-node_initializer_image: "public.ecr.aws/amazonlinux/amazonlinux:2023"
+node_initializer_image: "docker.io/nicolaka/netshoot:latest"
 
 # Namespace in which the initializer Jobs are created. Defaults to the
 # namespace where the operator is deployed (POD_NAMESPACE env var).

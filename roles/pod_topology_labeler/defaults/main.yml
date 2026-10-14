@@ -1,3 +1,4 @@
 ---
+egress_routing_model: "{{ lookup('env', 'EGRESS_ROUTING_MODEL') | default('pod-label', true) }}"
 egress_gateway_label_key: "cxl.io/egress-gw"
 egress_gateway_ready_label_key: "cxl.io/egress-ready"

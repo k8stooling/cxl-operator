@@ -193,6 +193,17 @@
             else {}
           }}
 
+    - name: Build secondary ENI tag map
+      ansible.builtin.set_fact:
+        secondary_eni_tags: >-
+          {{
+            {
+              (secondary_eni_tag_key): cilium_node_name,
+              (secondary_eni_cilium_ignore_tag_key): secondary_eni_cilium_ignore_tag_value,
+              'kubernetes.io/created-by': 'cxl-operator'
+            }
+          }}
+
     - name: Create and attach a new secondary ENI
       amazon.aws.ec2_eni:
         region: "{{ aws_region }}"
@@ -203,9 +214,7 @@
         name: "{{ secondary_eni_name_prefix }}-{{ cilium_node_name }}"
         description: "Managed by cxl-operator for {{ cilium_node_name }}"
         security_groups: "{{ node_security_groups }}"
-        tags:
-          "{{ secondary_eni_tag_key }}": "{{ cilium_node_name }}"
-          kubernetes.io/created-by: cxl-operator
+        tags: "{{ secondary_eni_tags }}"
       register: eni_result
       when: existing_eni.keys() | length == 0
 
@@ -218,6 +227,7 @@
         device_index: "{{ secondary_eni_device_index | int }}"
         delete_on_termination: true
         security_groups: "{{ node_security_groups }}"
+        tags: "{{ secondary_eni_tags }}"
       when: existing_eni.keys() | length > 0
 
     - name: Re-read the secondary ENI after create or reuse
@@ -281,56 +291,76 @@
             | union(egress_policy_default_excluded_cidrs)
           }}
 
-    - name: Extract the default-route gateway of the selected subnet
+    - name: Build dynamic Node metadata and selector maps
       ansible.builtin.set_fact:
-        subnet_gateway_id: >-
+        node_egress_annotations: >-
           {{
-            (selected_subnet.route_tables | default([])
-             | map(attribute='routes')
-             | flatten
-             | selectattr('destination_ip_range', 'defined')
-             | selectattr('destination_ip_range', 'equalto', '0.0.0.0/0')
-             | map(attribute='gateway_id')
-             | first)
-            | default('')
+            {
+              (secondary_eni_id_annotation): secondary_eni_id,
+              (secondary_eni_annotation): secondary_eni_ip
+            }
+          }}
+        node_egress_labels: >-
+          {{
+            {
+              (egress_gateway_label_key): egress_gateway_hash
+            }
+          }}
+        node_ready_labels: >-
+          {{
+            {
+              (egress_gateway_label_key): egress_gateway_hash,
+              (egress_gateway_ready_label_key): 'true'
+            }
+          }}
+        egress_policy_match_labels: >-
+          {{
+            {
+              (egress_gateway_label_key): egress_gateway_hash
+            }
           }}
 
-    - name: Look up the gateway IP address
-      amazon.aws.ec2_vpc_net_info:
-        region: "{{ aws_region }}"
-        filters:
-          gateway-id: "{{ subnet_gateway_id }}"
-      register: gateway_info
-      when: subnet_gateway_id | default('') | trim | length > 0
-
-    - name: Resolve the gateway IP
+    - name: Build the policy selector set for the chosen routing model
       ansible.builtin.set_fact:
-        secondary_eni_gateway: >-
+        egress_policy_selectors: >-
           {{
-            (gateway_info.internet_gateways | default([]))[0].ip
-            if (gateway_info.internet_gateways | default([])) | length > 0
-            else ''
+            [
+              {
+                'podSelector': {
+                  'matchLabels': (
+                    egress_policy_match_labels
+                    if egress_routing_model == 'pod-label'
+                    else {
+                      (egress_routing_workload_label_key): egress_routing_workload_label_value
+                    }
+                  )
+                }
+              }
+              | combine(
+                  (
+                    {
+                      'nodeSelector': {
+                        'matchLabels': {
+                          'kubernetes.io/hostname': cilium_node_name
+                        }
+                      }
+                    }
+                  ) if egress_routing_model == 'static-workload-label' else {},
+                  recursive=True
+                )
+            ]
           }}
-
-    - name: Fail when no default gateway could be resolved for the subnet
-      ansible.builtin.fail:
-        msg: >-
-          Could not resolve the default gateway of subnet
-          {{ selected_subnet.subnet_id }} (AZ {{ node_az }}); the initializer
-          Job requires it for policy-based routing.
-      when: secondary_eni_gateway | default('') | trim | length == 0
 
     - name: Record ENI state and gateway hash on the Node
       kubernetes.core.k8s:
-        api_version: v1
-        kind: Node
-        metadata:
-          name: "{{ cilium_node_name }}"
-          annotations:
-            "{{ secondary_eni_id_annotation }}": "{{ secondary_eni_id }}"
-            "{{ secondary_eni_annotation }}": "{{ secondary_eni_ip }}"
-          labels:
-            "{{ egress_gateway_label_key }}": "{{ egress_gateway_hash }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Node
+          metadata:
+            name: "{{ cilium_node_name }}"
+            annotations: "{{ node_egress_annotations }}"
+            labels: "{{ node_egress_labels }}"
 
     - name: Set the initializer Job name and namespace
       ansible.builtin.set_fact:
@@ -343,10 +373,73 @@
             else (lookup('env', 'POD_NAMESPACE') | default('', true))
           }}
 
+    - name: Check for an existing initializer Job
+      kubernetes.core.k8s_info:
+        api_version: batch/v1
+        kind: Job
+        name: "{{ node_initializer_job_name }}"
+        namespace: "{{ node_initializer_job_namespace }}"
+      register: node_initializer_job_existing
+
+    - name: Set initializer Job state facts
+      ansible.builtin.set_fact:
+        node_initializer_job_exists: "{{ (node_initializer_job_existing.resources | default([]) | length) > 0 }}"
+        node_initializer_job_succeeded: >-
+          {{
+            ((node_initializer_job_existing.resources | default([]) | first).status.succeeded | default(0) | int) > 0
+            if (node_initializer_job_existing.resources | default([]) | length) > 0
+            else false
+          }}
+        node_initializer_job_failed: >-
+          {{
+            ((node_initializer_job_existing.resources | default([]) | first).status.failed | default(0) | int) > 0
+            if (node_initializer_job_existing.resources | default([]) | length) > 0
+            else false
+          }}
+        node_initializer_job_should_create: >-
+          {{
+            (node_initializer_job_existing.resources | default([]) | length) == 0
+            or (
+              ((node_initializer_job_existing.resources | default([]) | first).status.failed | default(0) | int) > 0
+              and
+              ((node_initializer_job_existing.resources | default([]) | first).status.succeeded | default(0) | int) == 0
+            )
+            if (node_initializer_job_existing.resources | default([]) | length) > 0
+            else true
+          }}
+
+    - name: Delete a failed initializer Job before recreating it
+      kubernetes.core.k8s:
+        state: absent
+        api_version: batch/v1
+        kind: Job
+        name: "{{ node_initializer_job_name }}"
+        namespace: "{{ node_initializer_job_namespace }}"
+      when:
+        - node_initializer_job_exists
+        - node_initializer_job_failed
+        - not node_initializer_job_succeeded
+
+    - name: Wait for the initializer Job to be deleted
+      kubernetes.core.k8s_info:
+        api_version: batch/v1
+        kind: Job
+        name: "{{ node_initializer_job_name }}"
+        namespace: "{{ node_initializer_job_namespace }}"
+      register: node_initializer_job_deleted
+      retries: 20
+      delay: 3
+      until: (node_initializer_job_deleted.resources | default([]) | length) == 0
+      when:
+        - node_initializer_job_exists
+        - node_initializer_job_failed
+        - not node_initializer_job_succeeded
+
     - name: Apply the Node Initializer Job
       kubernetes.core.k8s:
-        src: "templates/node_initializer_job.yaml"
+        template: "templates/node_initializer_job.yaml"
         namespace: "{{ node_initializer_job_namespace }}"
+      when: node_initializer_job_should_create
 
     - name: Wait for the initializer Job to succeed
       kubernetes.core.k8s_info:
@@ -383,6 +476,22 @@
           failed for node {{ cilium_node_name }}.
       when: (node_initializer_job_res.resources[0].status.succeeded | default(0) | int) == 0
 
+    - name: Apply the node-local Cilium egress policy
+      kubernetes.core.k8s:
+        api_version: "{{ egress_policy_api_version }}"
+        kind: "{{ egress_policy_kind }}"
+        definition:
+          metadata:
+            name: "{{ egress_policy_name_prefix }}-{{ egress_gateway_hash }}"
+          spec:
+            selectors: "{{ egress_policy_selectors }}"
+            destinationCIDRs: "{{ egress_policy_destinations }}"
+            excludedCIDRs: "{{ egress_policy_excluded_cidrs }}"
+            egressGateway:
+              nodeSelector:
+                matchLabels: "{{ egress_policy_match_labels }}"
+              egressIP: "{{ secondary_eni_ip }}"
+
     - name: Remove the egress readiness taint from the Node
       kubernetes.core.k8s:
         state: patched
@@ -400,33 +509,43 @@
 
     - name: Mark the Node as egress-ready
       kubernetes.core.k8s:
-        api_version: v1
-        kind: Node
-        metadata:
-          name: "{{ cilium_node_name }}"
-          labels:
-            "{{ egress_gateway_label_key }}": "{{ egress_gateway_hash }}"
-            "{{ egress_gateway_ready_label_key }}": "true"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Node
+          metadata:
+            name: "{{ cilium_node_name }}"
+            labels: "{{ node_ready_labels }}"
 
-    - name: Apply the node-local Cilium egress policy
+    - name: Fetch pods scheduled to the proxy Node
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        field_selectors:
+          - spec.nodeName={{ cilium_node_name }}
+      register: node_pod_res
+      when: egress_routing_model == 'pod-label'
+
+    - name: Build the pod egress label patch
+      ansible.builtin.set_fact:
+        pod_egress_labels: "{{ { egress_gateway_label_key: egress_gateway_hash } }}"
+      when: egress_routing_model == 'pod-label'
+
+    - name: Label scheduled pods with the node-local egress hash
       kubernetes.core.k8s:
-        api_version: "{{ egress_policy_api_version }}"
-        kind: "{{ egress_policy_kind }}"
+        api_version: v1
+        kind: Pod
+        state: patched
         definition:
           metadata:
-            name: "{{ egress_policy_name_prefix }}-{{ egress_gateway_hash }}"
-          spec:
-            selectors:
-              - podSelector:
-                  matchLabels:
-                    "{{ egress_gateway_label_key }}": "{{ egress_gateway_hash }}"
-            destinationCIDRs: "{{ egress_policy_destinations }}"
-            excludedCIDRs: "{{ egress_policy_excluded_cidrs }}"
-            egressGateway:
-              nodeSelector:
-                matchLabels:
-                  "{{ egress_gateway_label_key }}": "{{ egress_gateway_hash }}"
-              interface: eth1
+            name: "{{ item.metadata.name }}"
+            namespace: "{{ item.metadata.namespace }}"
+            labels: "{{ pod_egress_labels }}"
+      loop: "{{ node_pod_res.resources | default([]) }}"
+      when: >-
+        egress_routing_model == 'pod-label'
+        and
+        (item.metadata.labels | default({}))[egress_gateway_label_key | default('')] | default('') != egress_gateway_hash
 
   rescue:
     - name: Fail the playbook so Kubernetes knows it failed
